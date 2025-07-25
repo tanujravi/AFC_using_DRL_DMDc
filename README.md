@@ -1,5 +1,4 @@
-# Flow modeling and control employing dynamic mode decomposition and
-deep reinforcement learning
+# Flow modeling and control employing dynamic mode decomposition and deep reinforcement learning
 The dynamic mode decomposition (DMD) is a popular modeling and analysis approach for fluid
 flows. The main idea is the data-based approximation of a linear operator that evolves the flow
 state incrementally forward in time. Moreover, the control-enabled extension, DMD with control
