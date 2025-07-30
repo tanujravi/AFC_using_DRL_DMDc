@@ -31,9 +31,7 @@ U = client.get_tensor(f"U_incremental_{mpi_rank}")
 # compute and save rank-r reconstruction
 s = client.get_tensor(f"s_incremental")
 VT = client.get_tensor(f"VT_incremental")
-rec = U @ np.diag(s) @ VT
-print(rec.shape)
-print(len(time_indices))
+rec = (U * s) @ VT
 n_points = rec.shape[0] // 3
 for i, ti in enumerate(time_indices):
     name = f"rank_{svd_rank}_field_name_{field_name}_mpi_rank_{mpi_rank}_time_index_{ti}"
