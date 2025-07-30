@@ -168,7 +168,7 @@ def compute_first_svd_USV(client, svd_ensemble_name, num_mpi_ranks, svd_rank):
         VT_svd = client.get_tensor(
             svd_ensemble_name + f"_{rank_i}.partSVD_VT_mpi_rank_{rank_i}"
         )
-        Y.append(np.diag(s_svd) @ VT_svd)
+        Y.append(s_svd[:, np.newaxis] * VT_svd)
     Y = np.concatenate(Y, axis=0)
     Uy, sy, VTy = np.linalg.svd(Y, full_matrices=False)
     Uy = Uy[:, :svd_rank]
@@ -202,7 +202,7 @@ def compute_second_svd_USV(client, svdz_ensemble_name, num_mpi_ranks, svd_rank):
         VT_svdz = client.get_tensor(
             svdz_ensemble_name + f"_{rank_i}.partSVD_VT_mpi_rank_{rank_i}"
         )
-        Yz.append(np.diag(s_svdz) @ VT_svdz)
+        Yz.append(s_svdz[:, np.newaxis] * VT_svdz)
     Yz = np.concatenate(Yz, axis=0)
     Uyz, syz, VTyz = np.linalg.svd(Yz, full_matrices=False)
     Uyz = Uyz[:, :svd_rank]
@@ -251,14 +251,15 @@ if __name__ == "__main__":
     try:
 
         client = Client(address=db.get_address()[0], cluster=False)
-        time_indices = list(range(10, 4001, 10))
-
-        num_mpi_ranks = 4
-        svd_rank = 15
-        i, batch = 10, 500
-        n_times = 4000
+        
+        config_svd = config["svd_params"]
+        num_mpi_ranks = config_svd["num_mpi_ranks"]
+        svd_rank = config_svd["svd_rank"]
+        i, batch = config_svd["snapshot_sampling_interval"], config_svd["batch_size"]
+        n_times = config_svd["end_time"]
         batch_no = 0
-
+        sampling_interval = config_svd["snapshot_sampling_interval"]
+      
         base_sim = start_openfoam_sim(exp, config)
 
         while i + batch <= n_times:
@@ -271,7 +272,7 @@ if __name__ == "__main__":
             if not fields_updated:
                 raise ValueError("Fields dataset list not updated.")
 
-            time_indices = list(range(i, min(i + batch + 1, n_times + 1), 10))
+            time_indices = list(range(i, min(i + batch + 1, n_times + 1), sampling_interval))
             svd_ensemble_name = f"svd_ensemble_batch_{batch_no}"
             run_first_svd(exp, time_indices, svd_rank, num_mpi_ranks, batch_no)
             U, s, VT, U_li = compute_first_svd_USV(client, svd_ensemble_name, num_mpi_ranks, svd_rank)
@@ -305,7 +306,7 @@ if __name__ == "__main__":
 
         exp.stop(base_sim)
         
-        time_indices_for_data = list(range(10, i+1, 10))
+        time_indices_for_data = list(range(sampling_interval, i+1, sampling_interval))
 
         plot_singular_values(time_indices_for_data, s_incremental, svd_rank)
 
