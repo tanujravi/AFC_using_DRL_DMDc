@@ -31,6 +31,23 @@ def fetch_timeseries(time_indices, mpi_rank):
 
 
 def wait_for_completion(exp, entities, poll_interval=5, timeout=None):
+    """Block until all entities in a SmartSim experiment complete.
+
+    Periodically checks whether each entity has completed. Raises an
+    exception if any entity fails or if a timeout occurs.
+
+    :param exp: SmartSim experiment instance.
+    :type exp: smartsim.Experiment
+    :param entities: List or group of SmartSim entities (Model or Ensemble).
+    :type entities: list or Ensemble or Model
+    :param poll_interval: Time (in seconds) between status checks, defaults to 5.
+    :type poll_interval: int, optional
+    :param timeout: Maximum wait time in seconds, defaults to None (waits indefinitely).
+    :type timeout: float, optional
+
+    :raises RuntimeError: If one or more entities fail.
+    :raises TimeoutError: If the timeout duration is exceeded.
+    """
     start_time = time.time()
 
     while True:
@@ -48,6 +65,18 @@ def wait_for_completion(exp, entities, poll_interval=5, timeout=None):
         time.sleep(poll_interval)
 
 def start_openfoam_sim(exp, config):
+    """Launch an OpenFOAM simulation using a SmartSim experiment.
+
+    This initializes and starts an OpenFOAM model via SmartSim.
+
+    :param exp: The SmartSim experiment context.
+    :type exp: smartsim.Experiment
+    :param config: Dictionary containing simulation parameters (e.g., paths, run options).
+    :type config: dict
+
+    :return: The SmartSim model instance running OpenFOAM.
+    :rtype: smartsim.Model
+    """   
     sim_config = config["simulation"]
     base_case_path = sim_config["base_case"]
     # base_name = base_case_path.split("/")[-1]
@@ -64,6 +93,20 @@ def start_openfoam_sim(exp, config):
     return base_sim
 
 def run_first_svd(exp, time_indices, svd_rank, num_mpi_ranks, batch_no):
+    """
+    Launch the first ensemble of partial SVD computations.
+
+    :param exp: SmartSim Experiment object used to define and run ensembles
+    :type exp: smartsim.Experiment
+    :param time_indices: Time indices to extract from simulation data
+    :type time_indices: list[int] or str
+    :param svd_rank: Target rank for SVD truncation
+    :type svd_rank: int
+    :param num_mpi_ranks: Number of MPI ranks to launch
+    :type num_mpi_ranks: int
+    :param batch_no: Index of the current batch
+    :type batch_no: int
+    """
     svd_settings = exp.create_run_settings(
         exe="python3", exe_args=f"partial_svd.py"
     )
@@ -90,7 +133,20 @@ def run_first_svd(exp, time_indices, svd_rank, num_mpi_ranks, batch_no):
     wait_for_completion(exp, svd_ensemble)
 
 def run_second_svd(exp, time_indices, svd_rank, num_mpi_ranks, batch_no):
+    """
+    Launch the second ensemble of SVD computations (Z-matrix type).
 
+    :param exp: SmartSim Experiment object used to define and run ensembles
+    :type exp: smartsim.Experiment
+    :param time_indices: Time indices to extract from simulation data
+    :type time_indices: list[int] or str
+    :param svd_rank: Target rank for SVD truncation
+    :type svd_rank: int
+    :param num_mpi_ranks: Number of MPI ranks to launch
+    :type num_mpi_ranks: int
+    :param batch_no: Index of the current batch
+    :type batch_no: int
+    """ 
     params_svdz = {
         "mpi_rank": list(range(num_mpi_ranks)),
         "svd_rank": svd_rank,
@@ -117,6 +173,16 @@ def run_second_svd(exp, time_indices, svd_rank, num_mpi_ranks, batch_no):
     wait_for_completion(exp, svdz_ensemble)
 
 def plot_singular_values(time_indices_for_data, s_incremental, svd_rank):
+    """
+    Plot singular values from both standard SVD and streaming SVD.
+
+    :param time_indices_for_data: Time indices for which data is collected
+    :type time_indices_for_data: list[int]
+    :param s_incremental: Singular values obtained from streaming SVD
+    :type s_incremental: list[float] or np.ndarray
+    :param svd_rank: Target rank for truncation in plotting
+    :type svd_rank: int
+    """  
     data_matrix = pt.cat([pt.tensor(fetch_timeseries(time_indices_for_data, rank_i)) for rank_i in range(num_mpi_ranks)], dim = 0)
     _, s_pl, _ = np.linalg.svd(data_matrix, full_matrices=False)
     s_pl = s_pl[:svd_rank]
@@ -132,6 +198,18 @@ def plot_singular_values(time_indices_for_data, s_incremental, svd_rank):
     fig.savefig("compare_svd_stream_to_full.png")
 
 def run_reconstruction(exp, svd_rank, num_mpi_ranks, time_indices_for_data):
+    """
+    Run ensemble job to reconstruct original data using SVD results.
+
+    :param exp: SmartSim Experiment object
+    :type exp: smartsim.Experiment
+    :param svd_rank: Rank used in SVD approximation
+    :type svd_rank: int
+    :param num_mpi_ranks: Number of MPI ranks used for ensemble
+    :type num_mpi_ranks: int
+    :param time_indices_for_data: Time indices for which reconstruction is performed
+    :type time_indices_for_data: list[int] or str
+    """ 
     # compute global left singular vectors and reconstruction
     rec_settings = exp.create_run_settings(exe="python3", exe_args=f"reconstruction.py")
     params = {
@@ -147,7 +225,22 @@ def run_reconstruction(exp, svd_rank, num_mpi_ranks, time_indices_for_data):
     wait_for_completion(exp, rec_ensemble)
 
 def run_svdToFoam(exp, svd_rank, field_name, fo_name, num_mpi_ranks, case_name):
+    """
+    Export SVD results to OpenFOAM field format via svdToFoam.
 
+    :param exp: SmartSim Experiment object
+    :type exp: smartsim.Experiment
+    :param svd_rank: SVD truncation rank
+    :type svd_rank: int
+    :param field_name: Field name to export (e.g., velocity or pressure)
+    :type field_name: str
+    :param fo_name: File object name or alias used by svdToFoam
+    :type fo_name: str
+    :param num_mpi_ranks: Number of MPI ranks used
+    :type num_mpi_ranks: int
+    :param case_name: OpenFOAM case directory path
+    :type case_name: str
+    """
     svdToFoam_settings = exp.create_run_settings(
         exe="svdToFoam",
         exe_args=f"-fieldName {field_name} -svdRank {svd_rank} -FOName {fo_name} -parallel",
@@ -160,6 +253,21 @@ def run_svdToFoam(exp, svd_rank, field_name, fo_name, num_mpi_ranks, case_name):
 
 
 def compute_first_svd_USV(client, svd_ensemble_name, num_mpi_ranks, svd_rank):
+    """
+    Compute SVD (U, S, VT) from distributed partial SVD results using split
+    and merge algorithm.
+
+    :param client: SmartRedis client used to fetch tensor data
+    :type client: smartredis.Client
+    :param svd_ensemble_name: Name of the ensemble storing SVD tensors
+    :type svd_ensemble_name: str
+    :param num_mpi_ranks: Number of MPI ranks used during computation
+    :type num_mpi_ranks: int
+    :param svd_rank: Final truncation rank of SVD
+    :type svd_rank: int
+    :return: Truncated U, S, VT matrices and list of local U parts
+    :rtype: tuple[np.ndarray, np.ndarray, np.ndarray, list[np.ndarray]]
+    """
     Y = []
     for rank_i in range(num_mpi_ranks):
         s_svd = client.get_tensor(
@@ -194,6 +302,21 @@ def compute_first_svd_USV(client, svd_ensemble_name, num_mpi_ranks, svd_rank):
     return U, s, VT, U_li
 
 def compute_second_svd_USV(client, svdz_ensemble_name, num_mpi_ranks, svd_rank):
+    """
+    Compute SVD (U, S, VT) from distributed Z-matrix SVD results using
+    online eigen algorithm.
+
+    :param client: SmartRedis client used to fetch tensor data
+    :type client: smartredis.Client
+    :param svdz_ensemble_name: Name of the ensemble storing Z-matrix SVD tensors
+    :type svdz_ensemble_name: str
+    :param num_mpi_ranks: Number of MPI ranks used during computation
+    :type num_mpi_ranks: int
+    :param svd_rank: Final truncation rank of SVD
+    :type svd_rank: int
+    :return: Truncated Uz, Sz, VTz matrices
+    :rtype: tuple[np.ndarray, np.ndarray, np.ndarray]
+    """
     Yz = []
     for rank_i in range(num_mpi_ranks):
         s_svdz = client.get_tensor(
@@ -242,7 +365,6 @@ if __name__ == "__main__":
     # field of which to compute the SVD
     field_name = "U"
 
-    # exp = Experiment("partitioned-svd-cylinder", launcher="local")
     makedirs(config["experiment"]["exp_path"], exist_ok=True)
     case_name = join(config["experiment"]["exp_path"], "base_sim")
     exp = Experiment(**config["experiment"])
@@ -251,13 +373,19 @@ if __name__ == "__main__":
     try:
 
         client = Client(address=db.get_address()[0], cluster=False)
-        
+
         config_svd = config["svd_params"]
+        
+        # number of mpi ranks used in openfoam simulation
         num_mpi_ranks = config_svd["num_mpi_ranks"]
+        # rank truncation
         svd_rank = config_svd["svd_rank"]
+        # batch size for the online eigen SVD
         i, batch = config_svd["snapshot_sampling_interval"], config_svd["batch_size"]
+        # end time
         n_times = config_svd["end_time"]
         batch_no = 0
+        # indices to sample from the database in intervals
         sampling_interval = config_svd["snapshot_sampling_interval"]
       
         base_sim = start_openfoam_sim(exp, config)
@@ -266,29 +394,43 @@ if __name__ == "__main__":
 
             time_index = i + batch
             name = f"list_time_index_{time_index}"
+            
+            # waits till data required for SVD of current batch is obtained 
             fields_updated = client.poll_list_length(
                 f"list_time_index_{time_index}", num_mpi_ranks, 10, 60000
             )
             if not fields_updated:
                 raise ValueError("Fields dataset list not updated.")
 
+            # time indices to sample from database
             time_indices = list(range(i, min(i + batch + 1, n_times + 1), sampling_interval))
+            
+            # ensemble name to execute different jobs for computing SVD for different paritions
             svd_ensemble_name = f"svd_ensemble_batch_{batch_no}"
+            
+            # function that executes the computation of SVD for different partitions using data from current batch
             run_first_svd(exp, time_indices, svd_rank, num_mpi_ranks, batch_no)
+            
+            # computing the SVD matrices using the partitionedSVD algorithm
             U, s, VT, U_li = compute_first_svd_USV(client, svd_ensemble_name, num_mpi_ranks, svd_rank)
             if batch_no == 0:
+                # The SVD of first batch is computed trivially as the full matrix is same as the data matrix of first batch
                 U_incremental = U
                 s_incremental = s
                 VT_incremental = VT
             else:
-
+                
+                # From the second batch, the SVD of full matrix computed using the online eigen algorithm  
                 z = np.concatenate((U_incremental * s_incremental, U * s), axis=1)
                 z_chunks = np.array_split(z, num_mpi_ranks, axis=0)
                 for mpi_rank, z_chunk in enumerate(z_chunks):
                     client.put_tensor(f"z_{batch_no}_{mpi_rank}", z_chunk)
             
                 svdz_ensemble_name = f"svdz_ensemble_batch_{batch_no}"
+                # function that executes the computation of SVD of Z matrix by partitoning it
                 run_second_svd(exp, time_indices, svd_rank, num_mpi_ranks, batch_no)
+                
+                # computing the SVD of full matrix using online eigen algorithm
                 Uz, sz, VTz = compute_second_svd_USV(client, svdz_ensemble_name, num_mpi_ranks, svd_rank)
                 U_incremental = Uz
                 s_incremental = sz
@@ -296,7 +438,7 @@ if __name__ == "__main__":
                     (VT_incremental.T @ VTz.T[:svd_rank], VT.T @ VTz.T[svd_rank:]),
                     axis=0,
                 ).T
-
+            # truncating SVD matrices
             U_incremental = U_incremental[:, :svd_rank]
             s_incremental = s_incremental[:svd_rank]
             VT_incremental = VT_incremental[:svd_rank]
@@ -308,6 +450,7 @@ if __name__ == "__main__":
         
         time_indices_for_data = list(range(sampling_interval, i+1, sampling_interval))
 
+        # validation for computed SVD
         plot_singular_values(time_indices_for_data, s_incremental, svd_rank)
 
         client.put_tensor(f"s_incremental", s_incremental)
@@ -317,8 +460,9 @@ if __name__ == "__main__":
         for mpi_rank, U_incre in enumerate(Us_incremental):
             client.put_tensor(f"U_incremental_{mpi_rank}", np.array(U_incre))
 
+        # function that computes the reconstruction
         run_reconstruction(exp, svd_rank, num_mpi_ranks, time_indices_for_data)
-
+        # convert the reconstructed matrix into openfoam readable fields
         run_svdToFoam(exp, svd_rank, field_name, fo_name, num_mpi_ranks, case_name)
 
         exp.stop(db)
