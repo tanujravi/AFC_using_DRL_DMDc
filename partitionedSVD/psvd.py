@@ -351,6 +351,23 @@ def compute_second_svd_USV(client, svdz_ensemble_name, num_mpi_ranks, svd_rank):
     VTz = VTyz
     return Uz, sz, VTz
 
+def delete_tensors_from_ensemble(client, ensemble_name, num_mpi_ranks):
+    """
+    Delete partitioned SVD tensors associated with a given ensemble name across all MPI ranks.
+
+    :param client: SmartRedis client used to communicate with the database
+    :type client: smartredis.Client
+    :param ensemble_name: Base name of the ensemble whose tensors are to be deleted
+    :type ensemble_name: str
+    :param num_mpi_ranks: Total number of MPI ranks involved in the ensemble
+    :type num_mpi_ranks: int
+    """
+
+    for rank_i in range(num_mpi_ranks):
+        client.delete_tensor(ensemble_name + f"_{rank_i}.partSVD_s_mpi_rank_{rank_i}")
+        client.delete_tensor(ensemble_name + f"_{rank_i}.partSVD_VT_mpi_rank_{rank_i}")
+        client.delete_tensor(ensemble_name + f"_{rank_i}.partSVD_U_mpi_rank_{rank_i}")
+
 if __name__ == "__main__":
 
     config_file = sys.argv[1] if len(sys.argv) > 1 else "config.yaml"
@@ -438,7 +455,13 @@ if __name__ == "__main__":
                     (VT_incremental.T @ VTz.T[:svd_rank], VT.T @ VTz.T[svd_rank:]),
                     axis=0,
                 ).T
+                delete_tensors_from_ensemble(client, svdz_ensemble_name, num_mpi_ranks)
+
+            # delete the SVD of batch data matrices frm database to save space
+            delete_tensors_from_ensemble(client, svd_ensemble_name, num_mpi_ranks)
+
             # truncating SVD matrices
+
             U_incremental = U_incremental[:, :svd_rank]
             s_incremental = s_incremental[:svd_rank]
             VT_incremental = VT_incremental[:svd_rank]
