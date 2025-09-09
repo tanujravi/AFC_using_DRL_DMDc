@@ -1,0 +1,66 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  com                                   |
+|   \\  /    A nd           | Website:  www.openfoam.com                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volVectorField;
+    arch        "LSB;label=32;scalar=64";
+    location    "0";
+    object      U;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+dimensions      [ 0 1 -1 0 0 0 0 ];
+
+internalField   uniform ( 0 0 0 );
+
+boundaryField
+{
+    inlet
+    {
+        type            fixedValue;
+        value           uniform (1 0 0);
+    }
+
+    outlet
+    {
+        type            zeroGradient;
+    }
+
+    "(top|bottom)"
+    {
+        type            noSlip;
+    }
+    cylinder
+	{
+ 	 type        rotatingWallVelocity;
+ 	 origin      (0.2 0.2 0); 
+	 axis        (0 0 1);
+         omega   csvFile;
+         omegaCoeffs
+         {
+            nHeaderLine         1;          // 1 if your CSV has a single header line
+            refColumn           0;          // time column
+            componentColumns    (1);        // ω column (scalar)
+            separator           ",";
+            mergeSeparators     no;
+            file                "omega.csv";
+            outOfBounds         clamp;      // clamp | repeat | warn
+            interpolationScheme linear;     // linear|nearest
+         }	
+	}
+
+    "(front|back)"
+    {
+        type            empty;
+    }
+}
+
+
+// ************************************************************************* //
