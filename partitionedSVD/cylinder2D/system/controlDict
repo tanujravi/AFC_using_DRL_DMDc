@@ -81,7 +81,7 @@ functions
         clusterMode off;
 
         // OpenFOAM fields to send to the database
-        fields (U);
+        fields (p U);
 
         // OpenFOAM patches to send
         patches (internal);
