@@ -9,13 +9,14 @@ from smartredis import Client
 import matplotlib.pyplot as plt
 from pandas import read_csv
 
+
 class OnlineRowPartitionedSVD:
     """Row-partitioned streaming SVD (Liang split & merge).
 
     Coordinates SmartSim/SmartRedis jobs that compute an online SVD over
     row-partitioned OpenFOAM fields, merges per-partition partial SVDs,
     and (optionally) reconstructs/export fields for post-processing.
-    
+
     :param config: Experiment + SVD configuration dictionary. Expected keys include
     ``experiment.exp_path`` (output path), ``svd_params.num_mpi_ranks``,
     ``svd_params.svd_rank``, ``svd_params.snapshot_sampling_interval``,
@@ -44,11 +45,9 @@ class OnlineRowPartitionedSVD:
     - Compute/merge SVD factors across batches
     - Save factors back to the DB, reconstruct snapshots, and export fields
     """
-    
+
     def __init__(self, config, exp, client):
-        
-        """Constructor method
-        """
+        """Constructor method"""
 
         self.config = config
         self.fo_name = self.config.get("io", {}).get("fo_name", "dataToSmartRedis")
@@ -57,7 +56,6 @@ class OnlineRowPartitionedSVD:
         self.exp_path = exp_cfg["exp_path"]
         makedirs(self.exp_path, exist_ok=True)
         self.case_name = join(self.exp_path, "base_sim")
-
 
         svd_cfg = self.config["svd_params"]
         self.num_mpi_ranks = svd_cfg["num_mpi_ranks"]
@@ -69,7 +67,6 @@ class OnlineRowPartitionedSVD:
         self.client = client
 
     def wait_for_completion(self, entities, poll_interval=5, timeout=None):
-
         """Block until all entities in a SmartSim experiment complete.
 
         Periodically checks whether each entity has completed. Raises an
@@ -86,11 +83,12 @@ class OnlineRowPartitionedSVD:
 
         :raises RuntimeError: If one or more entities fail.
         :raises TimeoutError: If the timeout duration is exceeded.
-        """    
+        """
         start = time.time()
         while True:
             statuses = self.exp.get_status(entities)
-            if all(s == SmartSimStatus.STATUS_COMPLETED for s in statuses): break
+            if all(s == SmartSimStatus.STATUS_COMPLETED for s in statuses):
+                break
             if any(s == SmartSimStatus.STATUS_FAILED for s in statuses):
                 raise RuntimeError("One or more entities failed.")
             if timeout and (time.time() - start) > timeout:
@@ -126,8 +124,10 @@ class OnlineRowPartitionedSVD:
         :type time_indices: list[int] | range | str
         :param batch_no: Batch counter used to namespace artifacts.
         :type batch_no: int
-        """        
-        svd_settings = self.exp.create_run_settings(exe="python3", exe_args="partial_svd.py")
+        """
+        svd_settings = self.exp.create_run_settings(
+            exe="python3", exe_args="partial_svd.py"
+        )
         quoted_fields = [f"'{s}'" for s in self.fields]
         quoted_fo_name = f"'{self.fo_name}'"
         params_svd = {
@@ -140,8 +140,9 @@ class OnlineRowPartitionedSVD:
             "batch_no": batch_no,
         }
         name = f"svd_ensemble_batch_{batch_no}"
-        ens = self.exp.create_ensemble(name, params=params_svd,
-                                    run_settings=svd_settings, perm_strategy="all_perm")
+        ens = self.exp.create_ensemble(
+            name, params=params_svd, run_settings=svd_settings, perm_strategy="all_perm"
+        )
         ens.attach_generator_files(to_configure="./partial_svd.py")
         self.exp.generate(ens, overwrite=True)
         self.exp.start(ens, summary=False, block=False)
@@ -158,7 +159,9 @@ class OnlineRowPartitionedSVD:
         :param batch_no: Batch counter used to namespace artifacts.
         :type batch_no: int
         """
-        svdW_settings = self.exp.create_run_settings(exe="python3", exe_args="partial_svd.py")
+        svdW_settings = self.exp.create_run_settings(
+            exe="python3", exe_args="partial_svd.py"
+        )
         quoted_fields = [f"'{s}'" for s in self.fields]
         quoted_fo_name = f"'{self.fo_name}'"
         params_svdW = {
@@ -171,8 +174,12 @@ class OnlineRowPartitionedSVD:
             "batch_no": batch_no,
         }
         name = f"svdW_ensemble_batch_{batch_no}"
-        ens = self.exp.create_ensemble(name, params=params_svdW,
-                                       run_settings=svdW_settings, perm_strategy="all_perm")
+        ens = self.exp.create_ensemble(
+            name,
+            params=params_svdW,
+            run_settings=svdW_settings,
+            perm_strategy="all_perm",
+        )
         ens.attach_generator_files(to_configure="./partial_svd.py")
         self.exp.generate(ens, overwrite=True)
         self.exp.start(ens, summary=False, block=False)
@@ -195,26 +202,37 @@ class OnlineRowPartitionedSVD:
         for field in self.fields:
             for rank in range(self.num_mpi_ranks):
 
-                s_svd = self.client.get_tensor(f"{svd_ensemble_name}_{r}.partSVD_s_field_name_{field}_mpi_rank_{rank}")
-                VT_svd = self.client.get_tensor(f"{svd_ensemble_name}_{r}.partSVD_VT_field_name_{field}_mpi_rank_{rank}")
+                s_svd = self.client.get_tensor(
+                    f"{svd_ensemble_name}_{r}.partSVD_s_field_name_{field}_mpi_rank_{rank}"
+                )
+                VT_svd = self.client.get_tensor(
+                    f"{svd_ensemble_name}_{r}.partSVD_VT_field_name_{field}_mpi_rank_{rank}"
+                )
                 Y.append(s_svd[:, np.newaxis] * VT_svd)
-                r+=1
+                r += 1
         Y = np.concatenate(Y, axis=0)
         Uy, sy, VTy = np.linalg.svd(Y, full_matrices=False)
-        Uy, sy, VTy = Uy[:, :self.svd_rank], sy[:self.svd_rank], VTy[:self.svd_rank]
+        Uy, sy, VTy = Uy[:, : self.svd_rank], sy[: self.svd_rank], VTy[: self.svd_rank]
 
         r = 0
         for field in self.fields:
-            #clean_field = field.strip("'\"") 
+            # clean_field = field.strip("'\"")
             for rank in range(self.num_mpi_ranks):
-                U_li.append(self.client.get_tensor(
-                    f"{svd_ensemble_name}_{r}.partSVD_U_field_name_{field}_mpi_rank_{rank}"
-                ))
-                r+=1
+                U_li.append(
+                    self.client.get_tensor(
+                        f"{svd_ensemble_name}_{r}.partSVD_U_field_name_{field}_mpi_rank_{rank}"
+                    )
+                )
+                r += 1
         self.parititon_sizes = [U_l.shape[0] for U_l in U_li]
         n_times_svd = U_li[0].shape[1]
-        U = np.concatenate([(U_svd @ Uy[i * n_times_svd:(i + 1) * n_times_svd])
-                            for i, U_svd in enumerate(U_li)], axis=0)
+        U = np.concatenate(
+            [
+                (U_svd @ Uy[i * n_times_svd : (i + 1) * n_times_svd])
+                for i, U_svd in enumerate(U_li)
+            ],
+            axis=0,
+        )
         return U, sy, VTy
 
     def compute_second_svd_USV(self, svdW_ensemble_name):
@@ -232,24 +250,39 @@ class OnlineRowPartitionedSVD:
         r = 0
         for field in self.fields:
             for rank in range(self.num_mpi_ranks):
-                s_svdw = self.client.get_tensor(f"{svdW_ensemble_name}_{r}.partSVD_s_field_name_{field}_mpi_rank_{rank}")
-                VT_svdw = self.client.get_tensor(f"{svdW_ensemble_name}_{r}.partSVD_VT_field_name_{field}_mpi_rank_{rank}")
+                s_svdw = self.client.get_tensor(
+                    f"{svdW_ensemble_name}_{r}.partSVD_s_field_name_{field}_mpi_rank_{rank}"
+                )
+                VT_svdw = self.client.get_tensor(
+                    f"{svdW_ensemble_name}_{r}.partSVD_VT_field_name_{field}_mpi_rank_{rank}"
+                )
                 Yw.append(s_svdw[:, np.newaxis] * VT_svdw)
-                r+=1
+                r += 1
         Yw = np.concatenate(Yw, axis=0)
         Uyw, syw, VTyw = np.linalg.svd(Yw, full_matrices=False)
-        Uyw, syw, VTyw = Uyw[:, :self.svd_rank], syw[:self.svd_rank], VTyw[:self.svd_rank]
+        Uyw, syw, VTyw = (
+            Uyw[:, : self.svd_rank],
+            syw[: self.svd_rank],
+            VTyw[: self.svd_rank],
+        )
 
         r = 0
         for field in self.fields:
             for rank in range(self.num_mpi_ranks):
-                Uw_li.append(self.client.get_tensor(
-                    f"{svdW_ensemble_name}_{r}.partSVD_U_field_name_{field}_mpi_rank_{rank}"
-                ))
-                r+=1
+                Uw_li.append(
+                    self.client.get_tensor(
+                        f"{svdW_ensemble_name}_{r}.partSVD_U_field_name_{field}_mpi_rank_{rank}"
+                    )
+                )
+                r += 1
         n_times_svdz = Uw_li[0].shape[1]
-        Uw = np.concatenate([(Uz_svd @ Uyw[i * n_times_svdz:(i + 1) * n_times_svdz])
-                             for i, Uz_svd in enumerate(Uw_li)], axis=0)
+        Uw = np.concatenate(
+            [
+                (Uz_svd @ Uyw[i * n_times_svdz : (i + 1) * n_times_svdz])
+                for i, Uz_svd in enumerate(Uw_li)
+            ],
+            axis=0,
+        )
         return Uw, syw, VTyw
 
     def delete_tensors_from_ensemble(self, ensemble_name):
@@ -264,10 +297,17 @@ class OnlineRowPartitionedSVD:
         r = 0
         for field in self.fields:
             for rank in range(self.num_mpi_ranks):
-                self.client.delete_tensor(f"{ensemble_name}_{r}.partSVD_s_field_name_{field}_mpi_rank_{rank}")
-                self.client.delete_tensor(f"{ensemble_name}_{r}.partSVD_VT_field_name_{field}_mpi_rank_{rank}")
-                self.client.delete_tensor(f"{ensemble_name}_{r}.partSVD_U_field_name_{field}_mpi_rank_{rank}")
-                r+=1
+                self.client.delete_tensor(
+                    f"{ensemble_name}_{r}.partSVD_s_field_name_{field}_mpi_rank_{rank}"
+                )
+                self.client.delete_tensor(
+                    f"{ensemble_name}_{r}.partSVD_VT_field_name_{field}_mpi_rank_{rank}"
+                )
+                self.client.delete_tensor(
+                    f"{ensemble_name}_{r}.partSVD_U_field_name_{field}_mpi_rank_{rank}"
+                )
+                r += 1
+
     def run_reconstruction(self, time_indices_for_data):
         """Reconstruct full-field snapshots from incremental SVD factors.
 
@@ -292,24 +332,29 @@ class OnlineRowPartitionedSVD:
         quoted_fields = [f"'{s}'" for s in fields_local]
 
         for field in quoted_fields:
-            rec_settings = self.exp.create_run_settings(exe="python3", exe_args="reconstruction.py")
+            rec_settings = self.exp.create_run_settings(
+                exe="python3", exe_args="reconstruction.py"
+            )
             params = {
                 "field_name": field,
                 "mpi_rank": list(range(self.num_mpi_ranks)),
                 "svd_rank": self.svd_rank,
                 "time_indices": str(time_indices_for_data),
             }
-            clean_field = field.strip("'\"") 
+            clean_field = field.strip("'\"")
 
-            ens = self.exp.create_ensemble(f"rec_ensemble_r{self.svd_rank}_field_name_{clean_field}",
-                                        params=params, run_settings=rec_settings,
-                                        perm_strategy="all_perm")
+            ens = self.exp.create_ensemble(
+                f"rec_ensemble_r{self.svd_rank}_field_name_{clean_field}",
+                params=params,
+                run_settings=rec_settings,
+                perm_strategy="all_perm",
+            )
             ens.attach_generator_files(to_configure="./reconstruction.py")
             self.exp.generate(ens, overwrite=True)
             self.exp.start(ens, summary=False, block=False)
             self.wait_for_completion(ens)
 
-    def run_svdToFoam(self, fields = ["p", "U"]):
+    def run_svdToFoam(self, fields=["p", "U"]):
         """Export reconstructed factors to OpenFOAM field format.
 
         Invokes `svdToFoam` in parallel for each field in `fields`, using
@@ -322,11 +367,15 @@ class OnlineRowPartitionedSVD:
             settings = self.exp.create_run_settings(
                 exe="svdToFoam",
                 exe_args=f"-fieldName {field} -svdRank {self.svd_rank} "
-                        f"-FOName {self.fo_name} -parallel",
-                run_command="mpirun", run_args={"np": f"{self.num_mpi_ranks}"}
+                f"-FOName {self.fo_name} -parallel",
+                run_command="mpirun",
+                run_args={"np": f"{self.num_mpi_ranks}"},
             )
-            model = self.exp.create_model(name=f"svdToFoam_r{self.svd_rank}_field_name_{field}",
-                                        run_settings=settings, path=self.case_name)
+            model = self.exp.create_model(
+                name=f"svdToFoam_r{self.svd_rank}_field_name_{field}",
+                run_settings=settings,
+                path=self.case_name,
+            )
             self.exp.start(model, summary=False, block=False)
             self.wait_for_completion(model)
 
@@ -360,24 +409,26 @@ class OnlineRowPartitionedSVD:
             r = 0
             for field in self.fields:
                 for rank in range(self.num_mpi_ranks):
-                    self.client.put_tensor(f"W_{batch_no}_field_name_{field}_mpi_rank_{rank}",
-                                            np.array(W_chunks[r]))
-                    r+=1
+                    self.client.put_tensor(
+                        f"W_{batch_no}_field_name_{field}_mpi_rank_{rank}",
+                        np.array(W_chunks[r]),
+                    )
+                    r += 1
 
             svdW_ensemble_name = f"svdW_ensemble_batch_{batch_no}"
             OnlineSVD.run_second_svd(time_indices, batch_no)
             Uw, sw, VTw = OnlineSVD.compute_second_svd_USV(svdW_ensemble_name)
             self.U_inc, self.s_inc = Uw, sw
             self.VT_inc = np.concatenate(
-                (self.VT_inc.T @ VTw.T[: self.svd_rank], VT.T @ VTw.T[self.svd_rank:]),
+                (self.VT_inc.T @ VTw.T[: self.svd_rank], VT.T @ VTw.T[self.svd_rank :]),
                 axis=0,
             ).T
             self.delete_tensors_from_ensemble(svdW_ensemble_name)
 
         self.delete_tensors_from_ensemble(svd_ensemble_name)
-        self.U_inc = self.U_inc[:, :self.svd_rank]
-        self.s_inc = self.s_inc[:self.svd_rank]
-        self.VT_inc = self.VT_inc[:self.svd_rank]
+        self.U_inc = self.U_inc[:, : self.svd_rank]
+        self.s_inc = self.s_inc[: self.svd_rank]
+        self.VT_inc = self.VT_inc[: self.svd_rank]
 
     def save_tensors(self):
         """Persist incremental SVD factors to the database.
@@ -391,10 +442,13 @@ class OnlineRowPartitionedSVD:
 
         r = 0
         for field in self.fields:
-            #clean_field = field.strip("'\"")
+            # clean_field = field.strip("'\"")
             for rank in range(self.num_mpi_ranks):
-                self.client.put_tensor(f"U_incremental_field_name_{field}_mpi_rank_{rank}", np.array(Us_inc[r]))
-                r+=1
+                self.client.put_tensor(
+                    f"U_incremental_field_name_{field}_mpi_rank_{rank}",
+                    np.array(Us_inc[r]),
+                )
+                r += 1
 
     def fetch_snapshot(self, time_index, mpi_rank, field_name):
         """Fetch a single snapshot vector for a field and rank.
@@ -416,18 +470,27 @@ class OnlineRowPartitionedSVD:
         if client.dataset_exists(dataset_name):
             dataset = client.get_dataset(dataset_name)
             if field_name == "Ux":
-                matrix = dataset.get_tensor(f"field_name_U_patch_internal")[:, 0].flatten()           
+                matrix = dataset.get_tensor(f"field_name_U_patch_internal")[
+                    :, 0
+                ].flatten()
 
             elif field_name == "Uy":
-                matrix = dataset.get_tensor(f"field_name_U_patch_internal")[:, 1].flatten()           
+                matrix = dataset.get_tensor(f"field_name_U_patch_internal")[
+                    :, 1
+                ].flatten()
             elif field_name == "Uz":
-                matrix = dataset.get_tensor(f"field_name_U_patch_internal")[:, 2].flatten()           
+                matrix = dataset.get_tensor(f"field_name_U_patch_internal")[
+                    :, 2
+                ].flatten()
             else:
-                matrix = dataset.get_tensor(f"field_name_{field_name}_patch_internal").flatten()           
+                matrix = dataset.get_tensor(
+                    f"field_name_{field_name}_patch_internal"
+                ).flatten()
 
             return matrix
         else:
             return None
+
     def fetch_timeseries(self, time_indices, mpi_rank, field_name):
         """Stack snapshots across time for one rank and field.
 
@@ -440,7 +503,9 @@ class OnlineRowPartitionedSVD:
         :return: 2D matrix shaped (n_dofs_per_rank, len(time_indices)).
         :rtype: np.ndarray
         """
-        return np.vstack([self.fetch_snapshot(ti, mpi_rank, field_name) for ti in time_indices]).T
+        return np.vstack(
+            [self.fetch_snapshot(ti, mpi_rank, field_name) for ti in time_indices]
+        ).T
 
     def plot_singular_values(self, time_indices_for_data):
         """Compare full SVD vs streaming SVD singular values.
@@ -455,20 +520,28 @@ class OnlineRowPartitionedSVD:
         """
         matrix = []
         for field in self.fields:
-            #clean_field = field.strip("'\"")
-        
-            data_matrix = pt.cat([pt.tensor(self.fetch_timeseries(time_indices_for_data, rank_i, field)) for rank_i in range(self.num_mpi_ranks)], dim = 0)
-            #print(data_matrix.shape)
+            # clean_field = field.strip("'\"")
+
+            data_matrix = pt.cat(
+                [
+                    pt.tensor(
+                        self.fetch_timeseries(time_indices_for_data, rank_i, field)
+                    )
+                    for rank_i in range(self.num_mpi_ranks)
+                ],
+                dim=0,
+            )
+            # print(data_matrix.shape)
             matrix.append(data_matrix)
-        matrix = pt.cat(matrix, dim = 0)
+        matrix = pt.cat(matrix, dim=0)
         _, s_pl, _ = np.linalg.svd(matrix, full_matrices=False)
-        s_pl = s_pl[:self.svd_rank]
+        s_pl = s_pl[: self.svd_rank]
         fig, ax = plt.subplots(figsize=(6, 3))
         ns = list(range(self.svd_rank))
         ax.plot(ns, s_pl, label="SVD")
         ax.plot(range(len(self.s_inc)), self.s_inc, label="stream. SVD")
         ax.legend()
-        #ax.set_xlim(0, 19)
+        # ax.set_xlim(0, 19)
         ax.set_xlabel(r"$i$")
         ax.set_ylabel(r"$\sigma_i$")
         ax.set_title("SVD singular values")
@@ -483,10 +556,14 @@ class OnlineRowPartitionedSVD:
         settings = self.exp.create_run_settings(
             exe="pimpleFoam",
             exe_args=f"-postProcess -dict system/FO_force -parallel",
-            run_command="mpirun", run_args={"np": f"{self.num_mpi_ranks}"}
+            run_command="mpirun",
+            run_args={"np": f"{self.num_mpi_ranks}"},
         )
-        model = self.exp.create_model(name="forces_reconstructed_fields",
-                                    run_settings=settings, path=self.case_name)
+        model = self.exp.create_model(
+            name="forces_reconstructed_fields",
+            run_settings=settings,
+            path=self.case_name,
+        )
         self.exp.start(model, summary=False, block=False)
         self.wait_for_completion(model)
 
@@ -502,7 +579,9 @@ class OnlineRowPartitionedSVD:
         :return: Time, drag coefficient (Cd), lift coefficient (Cl).
         :rtype: tuple[np.ndarray, np.ndarray, np.ndarray]
         """
-        path = join(self.base_sim_path, "postProcessing", force_folder, "0", "coefficient.dat")
+        path = join(
+            self.base_sim_path, "postProcessing", force_folder, "0", "coefficient.dat"
+        )
         df = read_csv(
             path,
             header=None,
@@ -546,7 +625,8 @@ class OnlineRowPartitionedSVD:
 
         plt.tight_layout()
         fig.savefig(save_path, dpi=300)
-        plt.close(fig)  # close to free memory  
+        plt.close(fig)  # close to free memory
+
 
 if __name__ == "__main__":
     config_file = sys.argv[1] if len(sys.argv) > 1 else "config.yaml"
@@ -563,7 +643,7 @@ if __name__ == "__main__":
     exp.start(db)
 
     config_svd = cfg["svd_params"]
-    
+
     # number of mpi ranks used in openfoam simulation
     num_mpi_ranks = config_svd["num_mpi_ranks"]
     # batch size for the online eigen SVD
@@ -574,33 +654,29 @@ if __name__ == "__main__":
     # indices to sample from the database in intervals
     sampling_interval = config_svd["snapshot_sampling_interval"]
 
-
     client = Client(address=db.get_address()[0], cluster=False)
     OnlineSVD = OnlineRowPartitionedSVD(cfg, exp, client)
 
-
-
     try:
         base_sim = OnlineSVD.start_openfoam_sim()
-
         i = OnlineSVD.sampling_interval
         batch_no = 0
+
         while i + batch_size <= n_times:
             time_index = i + batch_size
 
             # Wait for data for this batch
-            ok = client.poll_list_length(f"list_time_index_{time_index}",
-                                                num_mpi_ranks, 10, 60000)
+            ok = client.poll_list_length(
+                f"list_time_index_{time_index}", num_mpi_ranks, 10, 60000
+            )
             if not ok:
                 raise ValueError("Fields dataset list not updated.")
 
-            time_indices = list(range(i, min(i + batch_size + 1, n_times + 1),
-                                        sampling_interval))
+            time_indices = list(
+                range(i, min(i + batch_size + 1, n_times + 1), sampling_interval)
+            )
 
-
-            OnlineSVD.evaluate_increSVD(time_indices, batch_no)            
-
-
+            OnlineSVD.evaluate_increSVD(time_indices, batch_no)
             i += batch_size
             batch_no += 1
             print(f"svd stream done till time step = {i}")

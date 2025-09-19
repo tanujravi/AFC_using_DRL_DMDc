@@ -1,0 +1,9 @@
+AM
+AM_with_noise
+chirp
+chirp_with_noise
+random_walk
+random_walk_with_noise
+trial_tests
+.ip*
+omega.csv
