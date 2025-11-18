@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import csv
+from matplotlib.animation import FuncAnimation
 
 
 class DMDcPlotter:
@@ -95,11 +96,21 @@ class DMDcPlotter:
         labels = [
             str(ds.reference_dic.get("signal", "unknown")) for ds in self.datasets
         ]
-        max_len = max(len(ds.err_reconstruction) for ds in self.datasets)
-        ranks_full = list(range(1, max_len + 1))
         start_zoom, end_zoom = zoom
-        z0 = start_zoom - 1
-        zend = end_zoom - 1
+        zoom_dic = {}
+        for index, ds in enumerate(self.datasets):        
+        
+            zoomed_rank = []
+            zoomed_recon = []
+            zoomed_pred = []
+
+            for ind,rank_zoom in enumerate(ds.ranks):
+                if rank_zoom >= start_zoom and rank_zoom <= end_zoom:
+                    zoomed_rank.append(rank_zoom)
+                    zoomed_recon.append(ds.err_reconstruction[ind])
+                    zoomed_pred.append(ds.err_prediction[ind])
+                zoom_dic[index] = [zoomed_rank, zoomed_recon, zoomed_pred] 
+
         # Reconstruction
         fig, ax = plt.subplots(1, 2, figsize=(15, 5))
         ax[0].set_xlabel("rank")
@@ -107,7 +118,7 @@ class DMDcPlotter:
         ax[0].set_title("Reconstruction error with rank")
         for lbl, ds in zip(labels, self.datasets):
             ax[0].plot(
-                range(1, len(ds.err_reconstruction) + 1),
+                ds.ranks,
                 ds.err_reconstruction,
                 marker="x",
                 label=lbl,
@@ -118,15 +129,13 @@ class DMDcPlotter:
         ax[1].set_xlabel("rank")
         ax[1].set_ylabel(r"$L_{F}$")
         ax[1].set_title("Reconstruction error with rank - Zoomed")
-        for lbl, ds in zip(labels, self.datasets):
-            if len(ds.err_reconstruction) >= start_zoom:
-                ranks_zoom = list(range(start_zoom, end_zoom + 1))
-                ax[1].plot(
-                    ranks_zoom,
-                    ds.err_reconstruction[z0 : zend + 1],
-                    marker="x",
-                    label=lbl,
-                )
+        for ind, (lbl, ds) in enumerate(zip(labels, self.datasets)):
+            ax[1].plot(
+                zoom_dic[ind][0],
+                zoom_dic[ind][1],
+                marker="x",
+                label=lbl,
+            )
         ax[1].legend()
         ax[1].grid(True, alpha=0.3)
 
@@ -145,7 +154,7 @@ class DMDcPlotter:
         ax[0].set_title("Prediction error with rank")
         for lbl, ds in zip(labels, self.datasets):
             ax[0].plot(
-                range(1, len(ds.err_prediction) + 1),
+                ds.ranks,
                 ds.err_prediction,
                 marker="x",
                 label=lbl,
@@ -156,12 +165,10 @@ class DMDcPlotter:
         ax[1].set_xlabel("rank")
         ax[1].set_ylabel(r"$L_{L}$")
         ax[1].set_title("Prediction error with rank - Zoomed")
-        for lbl, ds in zip(labels, self.datasets):
-            if len(ds.err_prediction) >= start_zoom:
-                ranks_zoom = list(range(start_zoom, end_zoom + 1))
-                ax[1].plot(
-                    ranks_zoom, ds.err_prediction[z0 : zend + 1], marker="x", label=lbl
-                )
+        for ind, (lbl, ds) in enumerate(zip(labels, self.datasets)):
+            ax[1].plot(
+                zoom_dic[ind][0], zoom_dic[ind][2], marker="x", label=lbl
+            )
         ax[1].legend()
         ax[1].grid(True, alpha=0.3)
 
@@ -336,7 +343,7 @@ class DMDcPlotter:
                 plt.show()
             plt.close(fig)
 
-    def cross_prediction_table(self, save_csv=True):
+    def cross_prediction_table(self, save_csv=False):
         """Compute an N×N cross-prediction error matrix across datasets.
 
         Row ``i`` uses dataset ``i``’s DMDc model to predict flows of dataset
@@ -384,14 +391,25 @@ class DMDcPlotter:
         # Core cross-prediction table
         for i, src in enumerate(D):
             for j, tgt in enumerate(D):
+                x0  = src.x_ini              # (F x q), aligned with target grid
+
                 X_true = tgt.state_matrix  # (features x Tj)
                 U_tgt = tgt.signal_matrix  # (m x (Tj-1))
-                x0 = X_true[:, 0]  # original-space initial column
+                pad_cols = x0.shape[1]         # same number of columns as x0
 
-                X_pred = src.time_march_dmdc(src.dmdc, U_tgt, x0)  # (features x Tj)
+                m, _ = U_tgt.shape
+                U_tgt_ext = np.hstack([
+                    np.zeros((m, pad_cols)),   # zero padding (m x pad_cols)
+                    U_tgt                      # original (m x (T-1))
+                ])
 
-                num = np.linalg.norm(X_true - X_pred, ord="fro")
-                den = np.linalg.norm(X_true, ord="fro")
+                q = getattr(src, "q", 1)
+                #x0 = X_true[:, :q]  # original-space initial column
+
+                X_pred = src.time_march_dmdc(src.dmdc, U_tgt_ext, x0)  # (features x Tj)
+
+                num = np.linalg.norm(X_true[:,:] - X_pred[:,1:])
+                den = np.linalg.norm(X_true[:,:])
                 errors[i, j] = num / den if den > 0 else np.nan
 
         if save_csv:
@@ -404,5 +422,360 @@ class DMDcPlotter:
                     for i in range(N):
                         row = [labels[i]] + [f"{errors[i, j]:.6e}" for j in range(N)]
                         writer.writerow(row)
+        labels = [str(ds.reference_dic.get("signal", f"dataset_{i}")) for i, ds in enumerate(self.datasets)]
 
-        return errors
+        fig, ax = plt.subplots(figsize=(1.0*len(labels) + 6, 1.0*len(labels) + 4))
+
+        # Mask NaNs so they show as a distinct "bad" color in the default colormap
+        masked = np.ma.masked_invalid(errors)
+        im = ax.imshow(errors)
+
+        # Colorbar
+        cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        cbar.set_label(r"$L_{F}$")
+
+        # Ticks & labels
+        ax.set_xticks(np.arange(len(labels)))
+        ax.set_yticks(np.arange(len(labels)))
+        ax.set_xticklabels(labels, rotation=45, ha="right")
+        ax.set_yticklabels(labels)
+        ax.set_xlabel("Target dataset")
+        ax.set_ylabel("Model (source)")
+        ax.set_title("Cross-prediction error heatmap")
+        plt.show()
+
+    def plot_error_time_series(self, src_dataset):
+
+        if not hasattr(self, "datasets") or not self.datasets:
+            raise ValueError("No datasets provided to DMDcPlotter.")
+        lbl_src = str(src_dataset.reference_dic.get("signal", f"dataset_src"))
+        D = self.datasets
+        N = len(D)
+        labels = [
+            str(ds.reference_dic.get("signal", f"dataset_{k}"))
+            for k, ds in enumerate(D)
+        ]
+        # Ensure each ds has a FITTED model and dt set
+        for ds in D:
+            if not hasattr(ds, "dmdc"):
+                raise AttributeError(
+                    f"{ds} is missing `dmdc`. Create with ds.makeDMDcModel(...) first."
+                )
+
+        series_list = []   # list of np.arrays of per-step errors
+        index_list = []    # matching time indices per target
+
+        # Core cross-prediction table
+        for j, tgt in enumerate(D):
+            X_true = tgt.state_matrix  # (features x Tj)
+            U_tgt = tgt.signal_matrix  # (m x (Tj-1))
+            q = getattr(src_dataset, "q", 1)
+            x0 = X_true[:, :q]  # original-space initial column
+            X_pred = src_dataset.time_march_dmdc(src_dataset.dmdc, U_tgt, x0)  # (features x Tj)
+            T = X_true.shape[1]
+            errs = []
+            for t in range(q - 1, T):
+                num = np.linalg.norm(X_true[:, t] - X_pred[:, t - (q - 1)])
+                den = np.linalg.norm(X_true[:, t])
+                errs.append(num / den if den > 0 else np.nan)
+            series_list.append(np.asarray(errs))
+            index_list.append(np.arange(q - 1, q - 1 + len(errs)))
+
+
+        fig, ax = plt.subplots(figsize=(8, 4.5))
+        for lbl, idx, ser in zip(labels, index_list, series_list):
+            ax.plot(idx, ser, marker='.', linewidth=1.0, label=lbl)
+        ax.set_xlabel("time index t")
+        ax.set_ylabel("normalized per-step error")
+        ax.set_title(f"Time series cross-prediction error for {lbl_src}")
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc="best", fontsize=9)
+        plt.tight_layout()
+        plt.show()
+
+
+
+    def write_all_fields(self):
+        data = {}
+            
+        for src_dataset in self.datasets:
+            if not hasattr(self, "datasets") or not self.datasets:
+                raise ValueError("No datasets provided to DMDcPlotter.")
+            if not hasattr(src_dataset, "dmdc"):
+                raise AttributeError("src_dataset is missing `dmdc`. Fit it first.")
+
+            D = self.datasets
+            labels = [str(ds.reference_dic.get("signal", f"dataset_{k}")) for k, ds in enumerate(D)]
+            q = getattr(src_dataset, "q", 1)
+
+            # helper: split stacked features to (n_points x T) block for field f_idx
+            def get_field_block(X, field_idx):
+                n = src_dataset.n_points
+                r0 = field_idx * n
+                r1 = (field_idx + 1) * n
+                return X[r0:r1, :]
+
+
+            # per-target animations
+            pred_block = {}
+            omega_act = {}
+            for tgt, label in zip(D, labels):
+
+                sig_name = tgt.reference_dic.get("signal", "")
+                
+                
+                means_by_name = {}
+
+                x0     = src_dataset.x_ini              # (F x q), aligned with target grid
+                X_true = tgt.state_matrix          # (F x T)
+                U_tgt  = tgt.signal_matrix         # (m x (T-1))
+
+                pad_cols = x0.shape[1]         # same number of columns as x0
+
+                m, _ = U_tgt.shape
+                U_tgt_ext = np.hstack([
+                    np.zeros((m, pad_cols)),   # zero padding (m x pad_cols)
+                    U_tgt                      # original (m x (T-1))
+                ])
+
+                F, T   = X_true.shape
+
+
+                """
+                for f_name in src_dataset.field_names:
+                    attr_name = f_name.replace("_", "") + "_mean"
+
+                    if hasattr(src_dataset, attr_name):
+                        means_by_name[f_name] = getattr(tgt, attr_name)-getattr(src_dataset, attr_name)
+                for f_idx, f_name in enumerate(src_dataset.field_names):
+                    if f_name not in means_by_name:
+                        continue  # no mean stored for this field
+
+                    mu = np.asarray(means_by_name[f_name]).reshape(-1, 1)  # (n_points, 1)
+                    
+                    block = get_field_block(x0, f_idx)                     # (n_points, q)
+                    block += mu  
+                """
+                X_pred = src_dataset.time_march_dmdc(src_dataset.dmdc, U_tgt_ext, x0)  # (F x T_pred)
+                # align indices: truth starts at t0 = q-1; pred index maps to t-(q-1)
+
+                # Prepare per-field data blocks
+                field_blocks = []
+                pred_block[sig_name] = {}
+                
+                times_actual = np.asarray(tgt.times_used, dtype="float64")
+                dt = times_actual[1] - times_actual[0]
+                start_actual = times_actual[0]-dt
+                times_actual = np.concatenate(([start_actual], times_actual))
+                omega = tgt.f_omega(times_actual)
+                #omega_act[sig_name] = np.column_stack((times_arr, omega)) 
+                omega_act[sig_name] = np.column_stack((times_actual, omega)) 
+                
+                for f_idx, f_name in enumerate(src_dataset.field_names):
+                    
+                    """
+                    if f_name == "p":
+                        normalized_coeff = src_dataset.p_mean
+                    elif f_name == "u_x":
+                        normalized_coeff = src_dataset.ux_mean
+                    elif f_name == "u_y":
+                        normalized_coeff = src_dataset.uy_mean
+                    elif f_name == "u_z":
+                        normalized_coeff = src_dataset.uz_mean
+                    
+                    else:
+                        normalized_coeff = 0
+                    """
+                    
+                    #pred_block[sig_name][f_name]  = get_field_block(X_pred, f_idx)[:, :usable_T] + normalized_coeff                          # (n_pts x usable_T)
+                    pred_block[sig_name][f_name]  = get_field_block(X_pred, f_idx)
+            src_signal = str(src_dataset.reference_dic.get("signal", f"dataset"))
+            data[src_signal] = [pred_block, omega_act]
+        
+        return data
+
+    def place_sensors(self, bottom_left, n, h, dataset_idx=0, show=True, save=None):
+        """
+        Place an N×N grid of sensors starting at `bottom_left` with spacing `h`,
+        snap each to the closest mesh node (shared by all datasets), and plot.
+
+        Parameters
+        ----------
+        bottom_left : tuple[float, float]
+            (x0, y0) of the lower-left corner of the sensor grid (in physical coords).
+        n : int
+            Number of sensors along each axis → total sensors n*n.
+        h : float
+            Grid spacing between sensors.
+        dataset_idx : int, optional
+            Which dataset to use for the (x, y) node coordinates. Default 0.
+            (All your datasets share the same geometry, so any is fine.)
+        show : bool, optional
+            If True, calls plt.show() for the scatter figure.
+        save : str | None, optional
+            If a string (e.g. "sensors.png"), save the plot to this path.
+
+        Returns
+        -------
+        sensor_idx : np.ndarray, shape (k,)
+            Indices of the snapped sensor nodes in the mesh (unique, in row-major
+            sensor-grid order; duplicates removed).
+        snapped_xy : np.ndarray, shape (k, 2)
+            Coordinates of the snapped sensor nodes.
+        target_xy : np.ndarray, shape (n*n, 2)
+            The *intended* (unsnapped) sensor coordinates in row-major order.
+        """
+        if not hasattr(self, "datasets") or not self.datasets:
+            raise ValueError("No datasets provided to DMDcPlotter.")
+
+        if dataset_idx < 0 or dataset_idx >= len(self.datasets):
+            raise IndexError(f"dataset_idx={dataset_idx} out of range for {len(self.datasets)} datasets")
+
+        ds0 = self.datasets[dataset_idx]
+        x_nodes = np.asarray(ds0.x).ravel()
+        y_nodes = np.asarray(ds0.y).ravel()
+        if x_nodes.shape != y_nodes.shape:
+            raise ValueError("x and y node arrays must have the same shape")
+        if x_nodes.ndim != 1:
+            raise ValueError("x and y must be 1D arrays of node coordinates")
+
+        mesh_xy = np.column_stack([x_nodes, y_nodes])  # (N_nodes, 2)
+
+        # Build the regular sensor grid (row-major: y fastest or x fastest? → conventional x fastest)
+        x0, y0 = bottom_left
+        xs = x0 + h * np.arange(n, dtype=float)
+        ys = y0 + h * np.arange(n, dtype=float)
+        XX, YY = np.meshgrid(xs, ys, indexing="xy")  # shape (n, n)
+        target_xy = np.column_stack([XX.ravel(), YY.ravel()])  # (n*n, 2)
+
+        # Snap each sensor to nearest mesh node (vectorized)
+        # diffs: (n*n, N_nodes, 2)
+        diffs = mesh_xy[None, :, :] - target_xy[:, None, :]
+        dists = np.hypot(diffs[..., 0], diffs[..., 1])          # (n*n, N_nodes)
+        nearest = np.argmin(dists, axis=1)                      # (n*n,)
+
+        # De-duplicate while preserving first occurrence order (so row-major grid order is respected)
+        seen = set()
+        sensor_idx = []
+        for idx in nearest.tolist():
+            if idx not in seen:
+                sensor_idx.append(idx)
+                seen.add(idx)
+        sensor_idx = np.asarray(sensor_idx, dtype=int)
+
+        snapped_xy = mesh_xy[sensor_idx, :]
+
+        # Plot: all nodes tiny, sensors as big 'x'
+        fig, ax = plt.subplots(figsize=(20, 10))
+        ax.scatter(x_nodes, y_nodes, s=1, alpha=0.6)  # very small markers for the full grid
+        ax.scatter(snapped_xy[:, 0], snapped_xy[:, 1], marker='x', s=60, linewidths=1.5)  # sensors
+        ax.set_aspect("equal", adjustable="box")
+        ax.set_title(f"Sensor placement (n={n}, h={h})")
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+        ax.grid(True, alpha=0.2)
+
+        if save:
+            fig.savefig(save, dpi=300, bbox_inches="tight")
+        if show:
+            plt.show()
+        plt.close(fig)
+
+        # Optionally store on the instance for later use
+        self.sensor_indices = sensor_idx
+
+
+    def cross_prediction_table_at_sensors(self, save_csv=False):
+        """Compute an N×N cross-prediction error matrix across datasets.
+
+        Row ``i`` uses dataset ``i``’s DMDc model to predict flows of dataset
+        ``j`` (column), using dataset ``j``’s control signal and initial
+        state. The error is computed as
+        :math:`\\|X_{true} - X_{pred}\\|_F / \\|X_{true}\\|_F` over the full
+        time window.
+
+        Assumptions
+        -----------
+        - All datasets share the same feature layout and geometry ordering.
+        - Each dataset has ``state_matrix`` (``features × T``) and
+          ``signal_matrix`` (``m × (T-1)``).
+        - Each dataset has ``ds.dmdc`` prepared (e.g., via ``makeDMDcModel``).
+        - If available, ``ds.times_used`` may be used to set dt elsewhere,
+          but dt is not required here.
+
+        :param save_csv: If ``True``, write a CSV named
+            ``cross_prediction_errors.csv`` with labels from
+            ``ds.reference_dic["signal"]``.
+        :type save_csv: bool, optional
+        :returns: The error matrix ``errors`` shaped ``(N, N)``.
+        :rtype: numpy.ndarray
+        :raises ValueError: If the plotter has no datasets.
+        :raises AttributeError: If any dataset is missing ``dmdc``.
+        """
+        if not hasattr(self, "datasets") or not self.datasets:
+            raise ValueError("No datasets provided to DMDcPlotter.")
+        if not hasattr(self, "sensor_indices"):
+            raise AttributeError(
+                "Sensor indices not set. Run place_sensors(bottom_left, n, h, ...) first."
+            )
+        D = self.datasets
+        N = len(D)
+        labels = [
+            str(ds.reference_dic.get("signal", f"dataset_{k}"))
+            for k, ds in enumerate(D)
+        ]
+        errors = np.full((N, N), np.nan, dtype=float)
+
+        # Ensure each ds has a FITTED model and dt set
+        for ds in D:
+            if not hasattr(ds, "dmdc"):
+                raise AttributeError(
+                    f"{ds} is missing `dmdc`. Create with ds.makeDMDcModel(...) first."
+                )
+
+        # Core cross-prediction table
+        for i, src in enumerate(D):
+            for j, tgt in enumerate(D):
+                X_true = tgt.state_matrix  # (features x Tj)
+                U_tgt = tgt.signal_matrix  # (m x (Tj-1))
+                q = getattr(src, "q", 1)
+                x0 = X_true[:, :q]  # original-space initial column
+                X_pred = src.time_march_dmdc(src.dmdc, U_tgt, x0)  # (features x Tj)
+
+                X_true_sensor = X_true[self.sensor_indices, :]
+                X_pred_sensor = X_pred[self.sensor_indices, :]
+                num = np.linalg.norm(X_true_sensor[:, q-1:] - X_pred_sensor)
+                den = np.linalg.norm(X_true_sensor[:, q-1:])
+                errors[i, j] = num / den if den > 0 else np.nan
+
+        if save_csv:
+            # Save CSV if requested
+            csv_name = "cross_prediction_errors.csv"
+            if save_csv:
+                with open(csv_name, "w", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerow(["Model \\ Target"] + labels)
+                    for i in range(N):
+                        row = [labels[i]] + [f"{errors[i, j]:.6e}" for j in range(N)]
+                        writer.writerow(row)
+        labels = [str(ds.reference_dic.get("signal", f"dataset_{i}")) for i, ds in enumerate(self.datasets)]
+
+        fig, ax = plt.subplots(figsize=(1.0*len(labels) + 6, 1.0*len(labels) + 4))
+
+        # Mask NaNs so they show as a distinct "bad" color in the default colormap
+        masked = np.ma.masked_invalid(errors)
+        im = ax.imshow(errors)
+
+        # Colorbar
+        cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        cbar.set_label(r"$L_{F}$")
+
+        # Ticks & labels
+        ax.set_xticks(np.arange(len(labels)))
+        ax.set_yticks(np.arange(len(labels)))
+        ax.set_xticklabels(labels, rotation=45, ha="right")
+        ax.set_yticklabels(labels)
+        ax.set_xlabel("Target dataset")
+        ax.set_ylabel("Model (source)")
+        ax.set_title("Cross-prediction error heatmap")
+        plt.show()

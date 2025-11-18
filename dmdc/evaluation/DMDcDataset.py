@@ -35,12 +35,13 @@ class DMDcDataset:
     - ``signal_matrix`` (:class:`np.ndarray`): Shape ``(m, T-1)``, here ``m=1``.
     """
 
-    def __init__(self, folder_path, reference_dic, start_time=4.0, dim="2d"):
+    def __init__(self, folder_path, reference_dic, start_time=4.0, dim="2d", verbose = True):
         """Constructor method."""
         self.folder_path = folder_path
         self.reference_dic = reference_dic
         self.start_time = start_time
         self.dim = dim
+        self.verbose = verbose
         self.build_state_signal_matrix()
 
     def build_state_signal_matrix(self):
@@ -69,34 +70,37 @@ class DMDcDataset:
         self.x = np.asarray(vertices[:, 0])
         self.y = np.asarray(vertices[:, 1])
         self.n_points = self.x.size
-        print("Vertex arrays:", self.x.shape, self.y.shape)
 
         # Find the first index whose time >= start_time
 
         time_start_idx = int(np.searchsorted(times_arr, self.start_time, side="left"))
-
+        
         times_used = times[time_start_idx:]
+
+        times_initial = times[1:time_start_idx]
 
         u_inlet = float(self.reference_dic["u_inlet"])
 
         # ---- Pressure (mean-subtracted over space; normalized by u_inlet^2) ----
         p_snap = np.asarray(loader.load_snapshot("p", times_used), dtype=np.float32)
         # subtract spatial mean per time step
-        p_mean = np.atleast_2d(p_snap.mean(axis=1)).T  # (n_times, 1)
-        p_shifted = (p_snap - p_mean) / (u_inlet**2)
+        #self.p_mean = np.atleast_2d(p_snap.mean(axis=1)).T  # (n_times, 1)
+        #p_shifted = (p_snap - self.p_mean) / (u_inlet**2)
+        
+        p_shifted = (p_snap) / (u_inlet**2)
 
         # ---- Velocity components (mean-subtracted over space; normalized by u_inlet) ----
         U_snap = np.asarray(loader.load_snapshot("U", times_used), dtype=np.float32)
 
         # ux
         ux = U_snap[:, 0, :] / u_inlet
-        ux_mean = np.atleast_2d(ux.mean(axis=1)).T
-        ux = ux - ux_mean
-
+        #self.ux_mean = np.atleast_2d(ux.mean(axis=1)).T
+        #ux = ux - self.ux_mean
+        
         # uy
         uy = U_snap[:, 1, :] / u_inlet
-        uy_mean = np.atleast_2d(uy.mean(axis=1)).T
-        uy = uy - uy_mean
+        #self.uy_mean = np.atleast_2d(uy.mean(axis=1)).T
+        #uy = uy - self.uy_mean
 
         components = [p_shifted, ux, uy]
 
@@ -105,27 +109,63 @@ class DMDcDataset:
         if self.dim.lower() == "3d":
             # uz (assumes third component exists)
             uz = U_snap[:, 2, :] / u_inlet
-            uz_mean = np.atleast_2d(uz.mean(axis=1)).T
-            uz = uz - uz_mean
+            #uz_mean = np.atleast_2d(uz.mean(axis=1)).T
+            #uz = uz - uz_mean
             components.append(uz)
             field_names.append("u_z")
+
+
+
+        p_snap_ini = np.asarray(loader.load_snapshot("p", times_initial), dtype=np.float32)
+        # subtract spatial mean per time step
+        #self.p_mean = np.atleast_2d(p_snap.mean(axis=1)).T  # (n_times, 1)
+        #p_shifted = (p_snap - self.p_mean) / (u_inlet**2)
+        
+        p_shifted_ini = (p_snap_ini) / (u_inlet**2)
+
+        # ---- Velocity components (mean-subtracted over space; normalized by u_inlet) ----
+        U_snap_ini = np.asarray(loader.load_snapshot("U", times_initial), dtype=np.float32)
+
+        # ux
+        ux_ini = U_snap_ini[:, 0, :] / u_inlet
+        #self.ux_mean = np.atleast_2d(ux.mean(axis=1)).T
+        #ux = ux - self.ux_mean
+        
+        # uy
+        uy_ini = U_snap_ini[:, 1, :] / u_inlet
+        #self.uy_mean = np.atleast_2d(uy.mean(axis=1)).T
+        #uy = uy - self.uy_mean
+
+        components_ini = [p_shifted_ini, ux_ini, uy_ini]
+
+
+        if self.dim.lower() == "3d":
+            # uz (assumes third component exists)
+            uz_ini = U_snap[:, 2, :] / u_inlet
+            #uz_mean = np.atleast_2d(uz.mean(axis=1)).T
+            #uz = uz - uz_mean
+            components_ini.append(uz_ini)
 
         self.field_names = field_names
         self.times_used = times_used
         self.state_matrix = np.vstack(components).astype(np.float32)
+        self.state_matrix_ini = np.vstack(components_ini).astype(np.float32)
 
-        print(
-            "Shapes:",
-            "p:",
-            p_shifted.shape,
-            "ux:",
-            ux.shape,
-            "uy:",
-            uy.shape,
-            *(("uz:", uz.shape) if self.dim.lower() == "3d" else ()),
-            "state_matrix:",
-            self.state_matrix.shape,
-        )
+        if self.verbose:
+            print("Vertex arrays:", self.x.shape, self.y.shape)
+
+            print(
+                "Shapes:",
+                "p:",
+                p_shifted.shape,
+                "ux:",
+                ux.shape,
+                "uy:",
+                uy.shape,
+                *(("uz:", uz.shape) if self.dim.lower() == "3d" else ()),
+                "state_matrix:",
+                self.state_matrix.shape,
+            )
 
         omega_csv_path = os.path.join(self.folder_path, "omega.csv")
         data = np.genfromtxt(omega_csv_path, delimiter=",", names=True, dtype=float)
@@ -133,12 +173,13 @@ class DMDcDataset:
         omega_src = np.asarray(data["omega"], dtype=float)
 
         # Interpolation function
-        f_omega = interp1d(t_src, omega_src)
+        self.f_omega = interp1d(t_src, omega_src)
 
         # Signal matrix construction
-        omega_interp = f_omega(np.array(times_used[:-1]))  # shape (T,)
+        omega_interp = self.f_omega(np.array(times_used[:-1]))  # shape (T,)
         u_act = omega_interp * self.reference_dic["cyl_radius"]
         self.signal_matrix = np.atleast_2d(u_act.astype(np.float32))  # shape (1, T)
+
 
     def train_test_state_signal_split(self, train_test_ratio=0.75):
         """Split state and control into train/test windows (time-wise).
@@ -157,16 +198,18 @@ class DMDcDataset:
         index = round(train_test_ratio * self.state_matrix.shape[1])
         self.train_data = self.state_matrix[:, :index]
         self.test_data = self.state_matrix[:, index:]
-        print(f"Train state shape: {self.train_data.shape}")
-        print(f"Test state shape:  {self.test_data.shape}")
 
         self.train_u = self.signal_matrix[:, : index - 1]
         self.test_u = self.signal_matrix[:, index - 1 :]
         self.train_data_original = self.train_data
         self.test_data_original = self.test_data
 
-        print(f"Train signal shape: {self.train_u.shape}")
-        print(f"Test signal shape:  {self.test_u.shape}")
+        if self.verbose:
+            print(f"Train state shape: {self.train_data.shape}")
+            print(f"Test state shape:  {self.test_data.shape}")
+
+            print(f"Train signal shape: {self.train_u.shape}")
+            print(f"Test signal shape:  {self.test_u.shape}")
 
     def time_march_dmdc(self, dmdc_model, U, x0):
         """Roll out a reduced DMDc model and lift to full space.
@@ -216,7 +259,7 @@ class DMDcDataset:
         X_pred = Phi @ Z  # (n, T)
         return X_pred
 
-    def evaluate_svd_rank(self, max_rank):
+    def evaluate_svd_rank(self, ranks):
         """Grid search over SVD ranks for reconstruction and prediction error.
 
         For ranks ``1..max_rank``, fits :class:`pydmd.DMDc` on the train window,
@@ -229,7 +272,8 @@ class DMDcDataset:
         :returns: None. Populates ``err_reconstruction``, ``err_prediction``.
         :rtype: None
         """
-        ranks = list(range(1, max_rank + 1))
+        #ranks = list(range(1, max_rank + 1))
+        self.ranks = ranks
         self.err_reconstruction = []
         self.err_prediction = []
 
@@ -250,7 +294,7 @@ class DMDcDataset:
             )
             error = np.linalg.norm(
                 self.train_data_original - reconstructed_data
-            ) / np.linalg.norm(train_data)
+            ) / np.linalg.norm(self.train_data_original)
             self.err_reconstruction.append(error)
 
             predicted_flow = self.time_march_dmdc(
@@ -258,21 +302,21 @@ class DMDcDataset:
             )
             error = np.linalg.norm(
                 self.test_data_original - predicted_flow[:, 1:]
-            ) / np.linalg.norm(test_data)
+            ) / np.linalg.norm(self.test_data_original)
             self.err_prediction.append(error)
 
         rank_best_reconstruction = np.argmin(np.array(self.err_reconstruction))
         rank_best_prediction = np.argmin(np.array(self.err_prediction))
-
-        print(f"Details for {self.reference_dic['signal']}")
-        print(
-            f"Best reconstruction rank: {ranks[rank_best_reconstruction]} "
-            f"(error = {self.err_reconstruction[rank_best_reconstruction]:.4e})"
-        )
-        print(
-            f"Best prediction rank:     {ranks[rank_best_prediction]} "
-            f"(error = {self.err_prediction[rank_best_prediction]:.4e})"
-        )
+        if self.verbose:
+            print(f"Details for {self.reference_dic['signal']}")
+            print(
+                f"Best reconstruction rank: {ranks[rank_best_reconstruction]} "
+                f"(error = {self.err_reconstruction[rank_best_reconstruction]:.4e})"
+            )
+            print(
+                f"Best prediction rank:     {ranks[rank_best_prediction]} "
+                f"(error = {self.err_prediction[rank_best_prediction]:.4e})"
+            )
 
     def plot_reconstruction_prediction_all_fields(
         self, svd_rank, no_points=4, cmap="seismic", show=True, save=False
@@ -478,8 +522,8 @@ class DMDcDataset:
 
         Fits :class:`pydmd.DMDc` using ``state_matrix`` and ``signal_matrix``,
         computes integral contributions for every mode, caches eigen-information,
-        and stores reduced operators for rollout.
 
+        and stores reduced operators for rollout.
         :param svd_rank: Truncation rank passed to :class:`pydmd.DMDc`.
         :type svd_rank: int, optional
         :returns: None. Sets attributes:
@@ -538,6 +582,7 @@ class DMDcDataset:
             "test_u",
             "train_data_original",
             "test_data_original",
+            "state_matrix_ini"
         ):
             if hasattr(self, name):
                 setattr(self, name, None)
@@ -563,3 +608,4 @@ class DMDcDataset:
         self.eigs_real_part = self.eigs_real_part_all[indices_integral_cont]
         self.eigs_imag_part = np.abs(self.eigs_imag_part_all[indices_integral_cont])
         self.selected_modes = self.modes[:, indices_integral_cont]
+
