@@ -1,0 +1,42 @@
+simulation:
+  base_case: "cylinder2D"
+
+io:
+  fo_name: "dataToSmartRedis"
+
+experiment:
+  name: "cylinder2D-svd"
+  exp_path: "run/cylinder2D-svd"
+  launcher: "slurm"
+
+batch_settings:
+  batch_args:
+    nodes: 1
+    time: "00:30:00"
+    tasks-per-node: 2
+    cpus-per-task: 1
+    partition: "barnard"
+  preamble: ["module load release/24.04 GCC/12.3.0 OpenMPI/4.1.5 OpenFOAM/v2406 Python/3.11.3", "source $FOAM_BASH", "source /path/to/bopt/bin/activate"]
+
+batch_settings_sim:
+  batch_args:
+    nodes: 1
+    time: "00:30:00"
+    tasks-per-node: 2
+    cpus-per-task: 1
+    partition: "barnard"
+  preamble: ["module load release/24.04 GCC/12.3.0 OpenMPI/4.1.5 OpenFOAM/v2406 Python/3.11.3", "source $FOAM_BASH", "source /path/to/bopt/bin/activate"]
+
+svd_params:
+  num_mpi_ranks: 4
+  svd_rank: 15
+  batch_size: 500
+  snapshot_sampling_interval: 10
+  end_time: 4000
+
+database_settings:
+  db_nodes: 3
+  db_port: 6780
+  batch: True
+  time: "00:10:00"
+  interface: "enp1s0"

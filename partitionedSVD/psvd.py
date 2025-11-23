@@ -107,7 +107,9 @@ class OnlineRowPartitionedSVD:
         sim_config = self.config["simulation"]
         base_case_path = sim_config["base_case"]
         rs = RunSettings(exe="bash", exe_args="Allrun")
-        base_sim = self.exp.create_model("base_sim", run_settings=rs)
+        bs = self.batch_settings_from_config(exp, self.config.get("batch_settings_sim"))
+        
+        base_sim = self.exp.create_model("base_sim", run_settings=rs, batch_settings = bs)
         base_sim.attach_generator_files(to_copy=base_case_path)
         self.exp.generate(base_sim)
         self.exp.start(base_sim, block=False, summary=False)
@@ -140,8 +142,12 @@ class OnlineRowPartitionedSVD:
             "batch_no": batch_no,
         }
         name = f"svd_ensemble_batch_{batch_no}"
+        bs = self.batch_settings_from_config(exp, self.config.get("batch_settings"))
+        
         ens = self.exp.create_ensemble(
-            name, params=params_svd, run_settings=svd_settings, perm_strategy="all_perm"
+            name, params=params_svd, run_settings=svd_settings, perm_strategy="all_perm",
+            batch_settings = bs
+
         )
         ens.attach_generator_files(to_configure="./partial_svd.py")
         self.exp.generate(ens, overwrite=True)
@@ -174,10 +180,12 @@ class OnlineRowPartitionedSVD:
             "batch_no": batch_no,
         }
         name = f"svdW_ensemble_batch_{batch_no}"
+        bs = self.batch_settings_from_config(exp, self.config.get("batch_settings"))
         ens = self.exp.create_ensemble(
             name,
             params=params_svdW,
             run_settings=svdW_settings,
+            batch_settings = bs,
             perm_strategy="all_perm",
         )
         ens.attach_generator_files(to_configure="./partial_svd.py")
@@ -307,7 +315,18 @@ class OnlineRowPartitionedSVD:
                     f"{ensemble_name}_{r}.partSVD_U_field_name_{field}_mpi_rank_{rank}"
                 )
                 r += 1
-
+    @staticmethod
+    def batch_settings_from_config(exp, batch_config):
+        if batch_config is not None:
+            batch_args = batch_config.get("batch_args")
+            nodes = batch_args.get("nodes") if batch_args else None
+            bs = exp.create_batch_settings(batch_args=batch_args, nodes=nodes)
+            if "preamble" in batch_config:
+                bs.add_preamble(batch_config["preamble"])
+        else:
+            bs = None
+        return bs
+    
     def run_reconstruction(self, time_indices_for_data):
         """Reconstruct full-field snapshots from incremental SVD factors.
 
@@ -342,11 +361,13 @@ class OnlineRowPartitionedSVD:
                 "time_indices": str(time_indices_for_data),
             }
             clean_field = field.strip("'\"")
-
+            bs = self.batch_settings_from_config(exp, self.config.get("batch_settings"))
+        
             ens = self.exp.create_ensemble(
                 f"rec_ensemble_r{self.svd_rank}_field_name_{clean_field}",
                 params=params,
                 run_settings=rec_settings,
+                batch_settings = bs,
                 perm_strategy="all_perm",
             )
             ens.attach_generator_files(to_configure="./reconstruction.py")
@@ -371,9 +392,12 @@ class OnlineRowPartitionedSVD:
                 run_command="mpirun",
                 run_args={"np": f"{self.num_mpi_ranks}"},
             )
+            bs = self.batch_settings_from_config(exp, self.config.get("batch_settings_sim"))
+        
             model = self.exp.create_model(
                 name=f"svdToFoam_r{self.svd_rank}_field_name_{field}",
                 run_settings=settings,
+                batch_settings = bs,
                 path=self.case_name,
             )
             self.exp.start(model, summary=False, block=False)
@@ -559,9 +583,12 @@ class OnlineRowPartitionedSVD:
             run_command="mpirun",
             run_args={"np": f"{self.num_mpi_ranks}"},
         )
+        bs = self.batch_settings_from_config(exp, self.config.get("batch_settings"))
+        
         model = self.exp.create_model(
             name="forces_reconstructed_fields",
             run_settings=settings,
+            batch_settings = bs,
             path=self.case_name,
         )
         self.exp.start(model, summary=False, block=False)
@@ -639,7 +666,7 @@ if __name__ == "__main__":
     makedirs(cfg["experiment"]["exp_path"], exist_ok=True)
     case_name = join(cfg["experiment"]["exp_path"], "base_sim")
     exp = Experiment(**cfg["experiment"])
-    db = exp.create_database(port=1901, interface="lo")
+    db = exp.create_database(**cfg["database_settings"])
     exp.start(db)
 
     config_svd = cfg["svd_params"]
