@@ -1,6 +1,8 @@
 simulation:
   base_case: "cylinder2D"
 
+io:
+  fo_name: "dataToSmartRedis"
 experiment:
   name: "cylinder2D-svd"
   exp_path: "run/cylinder2D-svd"
@@ -12,3 +14,7 @@ svd_params:
   batch_size: 500
   snapshot_sampling_interval: 10
   end_time: 4000
+
+database_settings:
+  db_port: 6780
+  interface: "lo"
