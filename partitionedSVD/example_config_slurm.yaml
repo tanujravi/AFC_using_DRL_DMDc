@@ -33,10 +33,21 @@ svd_params:
   batch_size: 500
   snapshot_sampling_interval: 10
   end_time: 4000
+  start_index: 1000
 
 database_settings:
   db_nodes: 3
   db_port: 6780
   batch: True
   time: "00:10:00"
-  interface: "enp1s0"
+  interface: "ib2.001"
+
+delete_snapshot_batch: False
+
+plot:
+  compare_direct_partitioned: True #needs "delete_snapshot_batch" == False
+  CTU_factor: 10
+
+ref:
+  p_ref: 1
+  u_ref: 1

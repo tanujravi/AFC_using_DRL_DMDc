@@ -16,6 +16,12 @@ type_matrix = ;type;
 fo_name = ;fo_name;
 field_name = str(;field_name;)
 time_indices = ast.literal_eval(time_indices)
+ref_map = ast.literal_eval(str(;ref_map;))
+if field_name == "Ux" or field_name == "Uy" or field_name == "Uz":
+    ref_value = ref_map.get("U", 1.0)
+else:
+    ref_value = ref_map.get(field_name, 1.0)
+
 # connect to database
 client = Client(cluster=False)
 def fetch_snapshot(time_index):
@@ -32,7 +38,7 @@ def fetch_snapshot(time_index):
         else:
             matrix = dataset.get_tensor(f"field_name_{field_name}_patch_internal").flatten()           
 
-        return matrix
+        return matrix/ref_value
     else:
         return None
 
@@ -50,3 +56,4 @@ VT = VT[:svd_rank]
 client.put_tensor(f"partSVD_U_field_name_{field_name}_mpi_rank_{mpi_rank}", U)
 client.put_tensor(f"partSVD_VT_field_name_{field_name}_mpi_rank_{mpi_rank}", VT)
 client.put_tensor(f"partSVD_s_field_name_{field_name}_mpi_rank_{mpi_rank}", s)
+print("done")
