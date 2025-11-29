@@ -14,6 +14,9 @@ time_indices = str(;time_indices;)
 time_indices = ast.literal_eval(time_indices)
 
 field_name = str(;field_name;)
+ref_map = ast.literal_eval(str(;ref_map;))
+ref_value = ref_map.get(field_name, 1.0)
+
 # connect to database
 client = Client(cluster=False)
 
@@ -44,9 +47,12 @@ if field_name != "U":
 
     # Reconstruction: (n_points, r) * (r,) -> (n_points, r), then @ (r, K) -> (n_points, K)
     rec = (U_field * s) @ VT
-
+    rec *= ref_value
     name_prefix = f"rank_{svd_rank}_field_name_{field_name}_mpi_rank_{mpi_rank}"
     _put_scalar_series(name_prefix, rec)
+    for i in range(svd_rank):
+        name = f"global_U_field_name_{field_name}_mpi_rank_{mpi_rank}_mode_{i}"
+        client.put_tensor(name, np.copy(U_field[:, i]))
 
 else:
     # Try to get component U blocks; any missing -> zeros of correct shape
@@ -72,14 +78,22 @@ else:
 
     # Reconstruct each component (n_points, K)
     rec_x = (Ux * s) @ VT
+    rec_x *= ref_value
     rec_y = (Uy * s) @ VT
+    rec_y *= ref_value
+
     rec_z = (Uz * s) @ VT
+    rec_z *= ref_value
+
     # Write combined vector snapshots (n_points, 3) per time
     for i, ti in enumerate(time_indices):
         vec = np.stack([rec_x[:, i], rec_y[:, i], rec_z[:, i]], axis=1)  # (n_points, 3)
         key = f"rank_{svd_rank}_field_name_U_mpi_rank_{mpi_rank}_time_index_{ti}"
         client.put_tensor(key, np.copy(vec))
+    
+    for i in range(svd_rank):
+        name = f"global_U_field_name_U_mpi_rank_{mpi_rank}_mode_{i}"
+        vec = np.stack([Ux[:, i], Uy[:, i], Uz[:, i]], axis=1)
+        client.put_tensor(name, np.copy(vec))
 
-
-
-
+print("done")

@@ -8,8 +8,8 @@ from smartsim.status import SmartSimStatus
 from smartredis import Client
 import matplotlib.pyplot as plt
 from pandas import read_csv
-
-
+import shutil
+import os
 class OnlineRowPartitionedSVD:
     """Row-partitioned streaming SVD (Liang split & merge).
 
@@ -66,6 +66,11 @@ class OnlineRowPartitionedSVD:
         self.exp = exp
         self.client = client
 
+        self.ref_map = {
+            "p":  self.config["ref"].get("p_ref", 1.0),
+            "U": self.config["ref"].get("u_ref", 1.0),
+        }
+
     def wait_for_completion(self, entities, poll_interval=5, timeout=None):
         """Block until all entities in a SmartSim experiment complete.
 
@@ -106,12 +111,27 @@ class OnlineRowPartitionedSVD:
         """
         sim_config = self.config["simulation"]
         base_case_path = sim_config["base_case"]
+        case_dir = join(self.exp_path, "base_sim")
+        #os.makedirs(case_dir, exist_ok=True)
+
+        # Copy contents of base_case_path into case_dir
+        # dirs_exist_ok=True requires Python 3.8+
+        shutil.copytree(
+            base_case_path,
+            case_dir,
+            dirs_exist_ok=True
+        )
+
         rs = RunSettings(exe="bash", exe_args="Allrun")
         bs = self.batch_settings_from_config(exp, self.config.get("batch_settings_sim"))
-        
-        base_sim = self.exp.create_model("base_sim", run_settings=rs, batch_settings = bs)
-        base_sim.attach_generator_files(to_copy=base_case_path)
-        self.exp.generate(base_sim)
+        base_sim = self.exp.create_model("base_sim", run_settings=rs, batch_settings = bs, path = case_dir)
+        #base_sim.attach_generator_files(to_copy=base_case_path)
+        shutil.copytree(
+            base_case_path,
+            case_dir,
+            dirs_exist_ok=True
+        )
+        #self.exp.generate(base_sim)
         self.exp.start(base_sim, block=False, summary=False)
         self.base_sim_path = base_sim.path
         return base_sim
@@ -140,6 +160,7 @@ class OnlineRowPartitionedSVD:
             "time_indices": str(time_indices),
             "type": '"svd_new_matrix"',
             "batch_no": batch_no,
+            "ref_map": str(self.ref_map),
         }
         name = f"svd_ensemble_batch_{batch_no}"
         bs = self.batch_settings_from_config(exp, self.config.get("batch_settings"))
@@ -168,6 +189,7 @@ class OnlineRowPartitionedSVD:
         svdW_settings = self.exp.create_run_settings(
             exe="python3", exe_args="partial_svd.py"
         )
+
         quoted_fields = [f"'{s}'" for s in self.fields]
         quoted_fo_name = f"'{self.fo_name}'"
         params_svdW = {
@@ -178,6 +200,7 @@ class OnlineRowPartitionedSVD:
             "time_indices": str(time_indices),
             "type": '"W_matrix"',
             "batch_no": batch_no,
+            "ref_map": str(self.ref_map),
         }
         name = f"svdW_ensemble_batch_{batch_no}"
         bs = self.batch_settings_from_config(exp, self.config.get("batch_settings"))
@@ -359,6 +382,7 @@ class OnlineRowPartitionedSVD:
                 "mpi_rank": list(range(self.num_mpi_ranks)),
                 "svd_rank": self.svd_rank,
                 "time_indices": str(time_indices_for_data),
+                "ref_map": str(self.ref_map),
             }
             clean_field = field.strip("'\"")
             bs = self.batch_settings_from_config(exp, self.config.get("batch_settings"))
@@ -384,6 +408,11 @@ class OnlineRowPartitionedSVD:
         :param fields: List of field names to export (e.g., ["p","U"]).
         :type fields: list[str]
         """
+        
+        base_sim = self.base_sim_path # adjust if your attribute is named differently
+        cmd = 'foamDictionary -entry startFrom -set startTime system/controlDict'
+        os.system(f'cd {base_sim} && {cmd}')
+
         for field in fields:
             settings = self.exp.create_run_settings(
                 exe="svdToFoam",
@@ -490,6 +519,12 @@ class OnlineRowPartitionedSVD:
         :return: Flattened snapshot array or None if dataset missing.
         :rtype: np.ndarray | None
         """
+        if field_name == "Ux" or field_name == "Uy" or field_name == "Uz":
+            ref_value = self.ref_map.get("U", 1.0)
+        else:
+            ref_value = self.ref_map.get(field_name, 1.0)
+
+
         dataset_name = f"{self.fo_name}_time_index_{time_index}_mpi_rank_{mpi_rank}"
         if client.dataset_exists(dataset_name):
             dataset = client.get_dataset(dataset_name)
@@ -511,7 +546,7 @@ class OnlineRowPartitionedSVD:
                     f"field_name_{field_name}_patch_internal"
                 ).flatten()
 
-            return matrix
+            return matrix/ref_value
         else:
             return None
 
@@ -531,7 +566,7 @@ class OnlineRowPartitionedSVD:
             [self.fetch_snapshot(ti, mpi_rank, field_name) for ti in time_indices]
         ).T
 
-    def plot_singular_values(self, time_indices_for_data):
+    def plot_singular_values(self, time_indices_for_data, compare = True):
         """Compare full SVD vs streaming SVD singular values.
 
         Builds the full data matrix (concatenating all fields × ranks) for
@@ -542,35 +577,50 @@ class OnlineRowPartitionedSVD:
         :param time_indices_for_data: Indices used to assemble the full matrix.
         :type time_indices_for_data: list[int] | range
         """
-        matrix = []
-        for field in self.fields:
-            # clean_field = field.strip("'\"")
 
-            data_matrix = pt.cat(
-                [
-                    pt.tensor(
-                        self.fetch_timeseries(time_indices_for_data, rank_i, field)
-                    )
-                    for rank_i in range(self.num_mpi_ranks)
-                ],
-                dim=0,
-            )
-            # print(data_matrix.shape)
-            matrix.append(data_matrix)
-        matrix = pt.cat(matrix, dim=0)
-        _, s_pl, _ = np.linalg.svd(matrix, full_matrices=False)
-        s_pl = s_pl[: self.svd_rank]
-        fig, ax = plt.subplots(figsize=(6, 3))
+        if compare:
+            matrix = []
+            for field in self.fields:
+                # clean_field = field.strip("'\"")
+
+                data_matrix = pt.cat(
+                    [
+                        pt.tensor(
+                            self.fetch_timeseries(time_indices_for_data, rank_i, field)
+                        )
+                        for rank_i in range(self.num_mpi_ranks)
+                    ],
+                    dim=0,
+                )
+                matrix.append(data_matrix)
+            matrix = pt.cat(matrix, dim=0)
+            U_pl, s_pl, VT_pl = np.linalg.svd(matrix, full_matrices=False)
+            s_pl = s_pl[: self.svd_rank]
+            U_pl = U_pl[:, :self.svd_rank]
+            VT_pl = VT_pl[:self.svd_rank, :]
+        fig, ax = plt.subplots(figsize=(6, 4), dpi = 160)
         ns = list(range(self.svd_rank))
-        ax.plot(ns, s_pl, label="SVD")
-        ax.plot(range(len(self.s_inc)), self.s_inc, label="stream. SVD")
-        ax.legend()
-        # ax.set_xlim(0, 19)
-        ax.set_xlabel(r"$i$")
-        ax.set_ylabel(r"$\sigma_i$")
-        ax.set_title("SVD singular values")
-        fig.savefig("compare_svd_stream_to_full.png")
 
+        if compare:
+            ax.semilogy(ns, s_pl, label="Direct SVD", marker = "*")
+        ax.semilogy(range(len(self.s_inc)), self.s_inc, label="Partitioned SVD", linestyle = "--")
+        ax.legend(fontsize = 12)
+        ax.tick_params(axis='both', labelsize=12)
+        # ax.set_xlim(0, 19)
+        ax.set_xlabel(r"$i$", fontsize = 14)
+        ax.set_ylabel(r"$\sigma_i$", fontsize = 14)
+        #ax.set_title("SVD singular values")
+        fig.savefig("compare_svd_stream_to_full.png")
+        
+        if compare:
+            M_pl = U_pl @ np.diag(s_pl) @ VT_pl
+            M_inc = self.U_inc @ np.diag(self.s_inc) @ self.VT_inc
+
+            rec_err = np.linalg.norm(M_pl - M_inc, ord="fro") / (
+                np.linalg.norm(M_pl, ord="fro")
+            )
+            print(f"[Partitioned SVD] Relative reconstruction error: {rec_err:.3e}")
+    
     def runForcesFO(self):
         """Post-process reconstructed fields to compute force coefficients.
 
@@ -606,9 +656,12 @@ class OnlineRowPartitionedSVD:
         :return: Time, drag coefficient (Cd), lift coefficient (Cl).
         :rtype: tuple[np.ndarray, np.ndarray, np.ndarray]
         """
-        path = join(
-            self.base_sim_path, "postProcessing", force_folder, "0", "coefficient.dat"
-        )
+        force_dir = join(self.base_sim_path, "postProcessing", force_folder)
+        time_dirs = os.listdir(force_dir)
+        time_vals = [float(d) for d in time_dirs]
+        max_idx = max(range(len(time_vals)), key=lambda i: time_vals[i])
+        latest_time = time_dirs[max_idx]
+        path = join(force_dir, latest_time, "coefficient.dat")
         df = read_csv(
             path,
             header=None,
@@ -619,7 +672,42 @@ class OnlineRowPartitionedSVD:
         )
         return df["t"].to_numpy(), df["Cd"].to_numpy(), df["Cl"].to_numpy()
 
-    def plotLiftDragforcedComparison(self, save_path="forces_vs_recon.png"):
+
+    def delete_snapshot_batch(self, time_indices):
+        """Delete snapshot DataSets and their aggregation lists for a batch.
+
+        For each t in `time_indices`, this will:
+          1) Load all DataSets referenced in the aggregation list
+             'list_time_index_{t}' and delete those DataSets.
+          2) Delete the aggregation list itself.
+
+        Note: deleting the list alone does NOT delete the underlying datasets
+        or tensors; they must be deleted explicitly.
+        """
+        for ti in time_indices:
+            list_name = f"list_time_index_{ti}"
+
+            # First, delete all datasets that are referenced in the list
+            try:
+                datasets = self.client.get_datasets_from_list(list_name)
+            except Exception as e:
+                print(f"[delete_snapshot_batch] Could not get datasets from {list_name}: {e}")
+                datasets = []
+
+            for ds in datasets:
+                try:
+                    ds_name = ds.get_name()
+                    self.client.delete_dataset(ds_name)
+                except Exception as e:
+                    print(f"[delete_snapshot_batch] Failed to delete dataset {ds_name}: {e}")
+
+            # Then delete the aggregation list itself
+            try:
+                self.client.delete_list(list_name)
+            except Exception as e:
+                print(f"[delete_snapshot_batch] Failed to delete list {list_name}: {e}")
+
+    def plotLiftDragforcedComparison(self, save_path="forces_vs_recon", CTU_factor = 10):
         """Plot lift/drag comparison: original vs reconstructed.
 
         Reads coefficients from `forces` and `forces_recon`, plots Cd (left)
@@ -631,29 +719,58 @@ class OnlineRowPartitionedSVD:
 
         t1, Cd1, Cl1 = self.getLiftDragforces("forces")
         t2, Cd2, Cl2 = self.getLiftDragforces("forces_recon")
+        t_start = max(t1[0], t2[0])
 
-        fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharex=True)
+        # Indices where each time series reaches/exceeds the common start
+        i1 = np.searchsorted(t1, t_start)
+        i2 = np.searchsorted(t2, t_start)
 
+        # Trim both to start from the same physical time
+        t1 = t1[i1:]
+        Cd1 = Cd1[i1:]
+        Cl1 = Cl1[i1:]
+
+        t2 = t2[i2:]
+        Cd2 = Cd2[i2:]
+        Cl2 = Cl2[i2:]
+
+
+        conv_fact = CTU_factor
+        dt1 = t1[1] - t1[0]
+        dt2 = t2[1] - t2[0]
+        t1_start_ind = int(0.1/dt1)
+        t2_start_ind = int(0.1/dt2)
+
+        fig, axes = plt.subplots(figsize=(6, 4), dpi = 160)
         # Drag plot
-        axes[0].plot(t1[1:], Cd1[1:], label="forces", lw=1.5)
-        axes[0].plot(t2[1:-1], Cd2[1:-1], label="forced_recon", lw=1.5, linestyle="--")
-        axes[0].set_xlabel("Time")
-        axes[0].set_ylabel("Drag Coefficient (Cd)")
-        axes[0].legend()
-        axes[0].grid(True)
-
-        # Lift plot
-        axes[1].plot(t1[1:], Cl1[1:], label="forces", lw=1.5)
-        axes[1].plot(t2[1:-1], Cl2[1:-1], label="forced_recon", lw=1.5, linestyle="--")
-        axes[1].set_xlabel("Time")
-        axes[1].set_ylabel("Lift Coefficient (Cl)")
-        axes[1].legend()
-        axes[1].grid(True)
+        axes.plot(t1[t1_start_ind:]*conv_fact, Cd1[t1_start_ind:], label="Original field", lw=1.5)
+        axes.plot(t2[t2_start_ind:]*conv_fact, Cd2[t2_start_ind:], label="Reconstructed field", lw=1.5, linestyle="--")
+        axes.set_xlabel(r"$\tilde{t}$", fontsize = 14)
+        axes.set_ylabel(r"Drag Coefficient ($C_d$)", fontsize = 14)
+        axes.legend(fontsize = 12)
+        axes.grid(True)
+        axes.tick_params(axis='both', labelsize=12)
 
         plt.tight_layout()
-        fig.savefig(save_path, dpi=300)
-        plt.close(fig)  # close to free memory
+        fig.savefig(save_path+"_Drag.png")
+        plt.close(fig)  # close to free memory  
 
+        fig, axes = plt.subplots(figsize=(6, 4), dpi = 160)
+
+        # Lift plot
+        axes.plot(t1[t1_start_ind:]*conv_fact, Cl1[t1_start_ind:], label="Original field", lw=1.5)
+        axes.plot(t2[t2_start_ind:]*conv_fact, Cl2[t2_start_ind:], label="Reconstructed field", lw=1.5, linestyle="--")
+        axes.set_xlabel(r"$\tilde{t}$", fontsize = 14)
+        axes.set_ylabel(r"Lift Coefficient ($C_l$)", fontsize = 14)
+        axes.legend( fontsize = 12)
+        axes.grid(True)
+        axes.tick_params(axis='both', labelsize=12)
+
+        #fig.suptitle("Force coefficients comparison")
+
+        plt.tight_layout()
+        fig.savefig(save_path+"_Lift.png")
+        plt.close(fig)  # close to free memory  
 
 if __name__ == "__main__":
     config_file = sys.argv[1] if len(sys.argv) > 1 else "config.yaml"
@@ -667,60 +784,71 @@ if __name__ == "__main__":
     case_name = join(cfg["experiment"]["exp_path"], "base_sim")
     exp = Experiment(**cfg["experiment"])
     db = exp.create_database(**cfg["database_settings"])
+    db_batch_args = cfg.get("db_batch_args", {})
+
+    if db_batch_args:
+        for key, val in db_batch_args.items():
+            db.set_batch_arg(key, str(val))
+
     exp.start(db)
 
     config_svd = cfg["svd_params"]
 
+    start_index = config_svd["start_index"]
     # number of mpi ranks used in openfoam simulation
     num_mpi_ranks = config_svd["num_mpi_ranks"]
     # batch size for the online eigen SVD
-    i, batch_size = config_svd["snapshot_sampling_interval"], config_svd["batch_size"]
+    i, batch_size = config_svd["snapshot_sampling_interval"] + start_index, config_svd["batch_size"]
     # end time
-    n_times = config_svd["end_time"]
+    n_times = config_svd["end_time"] + start_index
     batch_no = 0
     # indices to sample from the database in intervals
     sampling_interval = config_svd["snapshot_sampling_interval"]
 
+
     client = Client(address=db.get_address()[0], cluster=False)
     OnlineSVD = OnlineRowPartitionedSVD(cfg, exp, client)
 
+
+
     try:
         base_sim = OnlineSVD.start_openfoam_sim()
-        i = OnlineSVD.sampling_interval
+        #i = OnlineSVD.sampling_interval
         batch_no = 0
-
-        while i + batch_size <= n_times:
-            time_index = i + batch_size
-
+        while i + batch_size <= n_times + batch_size:
+            time_index = i + batch_size - sampling_interval
             # Wait for data for this batch
             ok = client.poll_list_length(
-                f"list_time_index_{time_index}", num_mpi_ranks, 10, 60000
+                f"list_time_index_{time_index}", num_mpi_ranks, 1000, 6000000
             )
             if not ok:
                 raise ValueError("Fields dataset list not updated.")
 
             time_indices = list(
-                range(i, min(i + batch_size + 1, n_times + 1), sampling_interval)
+                range(i, min(i + batch_size + 1 - sampling_interval, n_times + 1), sampling_interval)
             )
 
             OnlineSVD.evaluate_increSVD(time_indices, batch_no)
+            if cfg["delete_snapshot_batch"]:
+                OnlineSVD.delete_snapshot_batch(time_indices)
             i += batch_size
             batch_no += 1
-            print(f"svd stream done till time step = {i}")
+            print(f"svd stream done till time step = {time_index}")
 
         exp.stop(base_sim)
 
         # Validation indices
-        time_indices_for_data = list(range(sampling_interval, i + 1, sampling_interval))
-
+        time_indices_for_data = list(range(sampling_interval+start_index, i + 1 - sampling_interval, sampling_interval))
         # Save factors
         OnlineSVD.save_tensors()
         # Recon + export
-        OnlineSVD.plot_singular_values(time_indices_for_data)
+        compare_bool = cfg["plot"]["compare_direct_partitioned"]
+        OnlineSVD.plot_singular_values(time_indices_for_data, compare= compare_bool)
         OnlineSVD.run_reconstruction(time_indices_for_data)
         OnlineSVD.run_svdToFoam(fields=["p", "U"])
         OnlineSVD.runForcesFO()
-        OnlineSVD.plotLiftDragforcedComparison()
+        CTU_factor = float(cfg["plot"]["CTU_factor"])
+        OnlineSVD.plotLiftDragforcedComparison(CTU_factor=CTU_factor)
         exp.stop(db)
 
     except Exception as e:
