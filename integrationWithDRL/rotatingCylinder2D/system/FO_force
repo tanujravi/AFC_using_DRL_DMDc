@@ -1,0 +1,82 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      myDict;
+}
+functions
+{
+    // Note: the phi field is required by the CourantNo function object
+
+    forces
+    {
+        type            forceCoeffs;
+        libs            (forces);
+        executeControl  runTime;
+        executeInterval 0.01;
+        writeControl    runTime;
+        writeInterval   0.01;
+        timeStart       4.0;
+        log false;
+        patches
+        (
+            cylinder
+        );
+        coefficients    (Cd Cl);
+        rhoInf          1;
+        rho             rhoInf;
+        CofR            (0.2 0.2 0.005);
+        liftDir         (0 1 0);
+        dragDir         (1 0 0);
+        magUInf         1.0;
+        lRef            0.1;
+        Aref            0.001;
+    }
+
+    probes
+    {
+        type            probes;
+        libs            (sampling);
+
+        // Name of the directory for probe data
+        name            probes;
+
+        // Write at same frequency as fields
+        executeControl  runTime;
+        executeInterval 0.01;
+        writeControl    runTime;
+        writeInterval   0.01;
+        timeStart       4.0;
+
+        // Fields to be probed
+        fields          (p);
+
+        // Optional: do not recalculate cells if mesh moves
+        fixedLocations  true;
+
+        // Optional: interpolation scheme to use (default is cell)
+        interpolationScheme cell;
+
+        probeLocations
+        (
+            (0.3 0.15 0.005)
+            (0.3 0.2 0.005)
+            (0.3 0.25 0.005)
+            (0.4 0.15 0.005)
+            (0.4 0.2 0.005)
+            (0.4 0.25 0.005)
+            (0.5 0.15 0.005)
+            (0.5 0.2 0.005)
+            (0.5 0.25 0.005)
+            (0.6 0.15 0.005)
+            (0.6 0.2 0.005)
+            (0.6 0.25 0.005)
+        );
+
+        // Optional: filter out points that haven't been found. Default
+        //           is to include them (with value -VGREAT)
+        includeOutOfBounds  false;
+    }
+
+}

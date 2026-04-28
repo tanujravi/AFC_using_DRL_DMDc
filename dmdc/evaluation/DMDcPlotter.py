@@ -2,7 +2,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import csv
 from matplotlib.animation import FuncAnimation
-
+from flowtorch.data import FOAMDataloader
+import os
 
 class DMDcPlotter:
     """Utilities to visualize DMDc errors, spectra, and modes across datasets.
@@ -527,18 +528,17 @@ class DMDcPlotter:
                 means_by_name = {}
 
                 x0     = src_dataset.x_ini              # (F x q), aligned with target grid
-                X_true = tgt.state_matrix          # (F x T)
-                U_tgt  = tgt.signal_matrix         # (m x (T-1))
+                #X_true = tgt.state_matrix          # (F x T)
+                U_tgt  = tgt.signal_matrix_act         # (m x (T-1))
 
                 pad_cols = x0.shape[1]         # same number of columns as x0
 
                 m, _ = U_tgt.shape
-                U_tgt_ext = np.hstack([
+                U_tgt_ext = np.asarray(np.hstack([
                     np.zeros((m, pad_cols)),   # zero padding (m x pad_cols)
                     U_tgt                      # original (m x (T-1))
-                ])
+                ]), dtype = np.float32)
 
-                F, T   = X_true.shape
 
 
                 """
@@ -563,7 +563,7 @@ class DMDcPlotter:
                 field_blocks = []
                 pred_block[sig_name] = {}
                 
-                times_actual = np.asarray(tgt.times_used, dtype="float64")
+                times_actual = np.asarray(tgt.times_used_act, dtype="float64")
                 dt = times_actual[1] - times_actual[0]
                 start_actual = times_actual[0]-dt
                 times_actual = np.concatenate(([start_actual], times_actual))
@@ -779,3 +779,885 @@ class DMDcPlotter:
         ax.set_ylabel("Model (source)")
         ax.set_title("Cross-prediction error heatmap")
         plt.show()
+
+    def get_predictions_for_signal(self, tgt_signal):
+
+        data = {}
+            
+        for src_dataset in self.datasets:
+            if not hasattr(self, "datasets") or not self.datasets:
+                raise ValueError("No datasets provided to DMDcPlotter.")
+            if not hasattr(src_dataset, "dmdc"):
+                raise AttributeError("src_dataset is missing `dmdc`. Fit it first.")
+
+            D = self.datasets
+            labels = [str(ds.reference_dic.get("signal", f"dataset_{k}")) for k, ds in enumerate(D)]
+            q = getattr(src_dataset, "q", 1)
+
+            # helper: split stacked features to (n_points x T) block for field f_idx
+            def get_field_block(X, field_idx):
+                n = src_dataset.n_points
+                r0 = field_idx * n
+                r1 = (field_idx + 1) * n
+                return X[r0:r1, :]
+
+
+            # per-target animations
+            pred_block = {}
+            omega_act = {}
+
+            sig_name = tgt_signal.reference_dic.get("signal", "")
+            
+            
+            means_by_name = {}
+
+            x0     = tgt_signal.x_ini              # (F x q), aligned with target grid
+            #X_true = tgt.state_matrix          # (F x T)
+            U_tgt  = tgt_signal.signal_matrix_act         # (m x (T-1))
+
+            pad_cols = x0.shape[1]         # same number of columns as x0
+
+            m, _ = U_tgt.shape
+            U_tgt_ext = np.asarray(np.hstack([
+                np.zeros((m, pad_cols)),   # zero padding (m x pad_cols)
+                U_tgt                      # original (m x (T-1))
+            ]), dtype = np.float32)
+
+
+            X_pred = src_dataset.time_march_dmdc(src_dataset.dmdc, U_tgt_ext, x0)  # (F x T_pred)
+            # align indices: truth starts at t0 = q-1; pred index maps to t-(q-1)
+
+            # Prepare per-field data blocks
+            field_blocks = []
+            pred_block[sig_name] = {}
+            
+            times_actual = np.asarray(tgt_signal.times_used_act, dtype="float64")
+            dt = times_actual[1] - times_actual[0]
+            start_actual = times_actual[0]-dt
+            times_actual = np.concatenate(([start_actual], times_actual))
+            omega = tgt_signal.f_omega(times_actual)
+            #omega_act[sig_name] = np.column_stack((times_arr, omega)) 
+            omega_act[sig_name] = np.column_stack((times_actual, omega)) 
+            
+            for f_idx, f_name in enumerate(src_dataset.field_names):
+                
+                
+                #pred_block[sig_name][f_name]  = get_field_block(X_pred, f_idx)[:, :usable_T] + normalized_coeff                          # (n_pts x usable_T)
+                pred_block[sig_name][f_name]  = get_field_block(X_pred, f_idx)
+            src_signal = str(src_dataset.reference_dic.get("signal", f"dataset"))
+            data[src_signal] = [pred_block, omega_act]
+        
+        return data
+
+    def get_predictions_for_signal_using_shuffling(self, tgt_signal, steps_per_model: int = 1):
+        """
+        Build a single prediction by shuffling *operators* per time step.
+
+        We replicate the logic of TimeDelayedDMDc.time_march_dmdc +
+        DMDcDataset.time_march_dmdc, but instead of a single DMDc model,
+        we use the list of models from self.datasets in a round-robin way:
+
+            for k-th time step:
+                model_index = (k // steps_per_model) % n_models
+
+        All datasets are assumed to share the same U_dr, rank_dr, q, qu, step,
+        stepU and f_orig, so that the augmented state space is consistent.
+        """
+
+        if steps_per_model < 1:
+            raise ValueError("steps_per_model must be >= 1")
+
+        if not hasattr(self, "datasets") or not self.datasets:
+            raise ValueError("No datasets provided to DMDcPlotter.")
+
+        D = self.datasets
+        n_models = len(D)
+
+        # Sanity: all must have fitted dmdc and shared dimensionality
+        for ds in D:
+            if not hasattr(ds, "dmdc"):
+                raise AttributeError("One of the datasets is missing `dmdc`. Fit it first.")
+
+        # Reference dataset for shapes / delay params / U_dr
+        ref = D[0]
+        dmdc0 = ref.dmdc
+
+        # --- Target signal info (same for all operators) ---
+        sig_name = tgt_signal.reference_dic.get("signal", "")
+        x0 = tgt_signal.x_ini                    # (f_orig x q) on target grid
+        U_tgt = tgt_signal.signal_matrix_act     # (m x (T-1))
+
+        pad_cols = x0.shape[1]                   # q
+        m, _ = U_tgt.shape
+        U_tgt_ext = np.asarray(
+            np.hstack(
+                [
+                    np.zeros((m, pad_cols)),     # zero padding to align with delay
+                    U_tgt,
+                ]
+            ),
+            dtype=np.float32,
+        )
+
+        # --- Build time vector and omega_act (same as before) ---
+        times_actual = np.asarray(tgt_signal.times_used_act, dtype="float64")
+        dt = times_actual[1] - times_actual[0]
+        start_actual = times_actual[0] - dt
+        times_actual = np.concatenate(([start_actual], times_actual))
+        omega = tgt_signal.f_omega(times_actual)
+        omega_act = {sig_name: np.column_stack((times_actual, omega))}
+
+        # --- Prepare augmented initial state (tilt_x0) in delayed space ---
+        x0_arr = np.asarray(x0)
+        if x0_arr.ndim == 1:
+            x0_arr = x0_arr[:, None]
+
+        q = ref.q
+        fq = dmdc0["basis"].shape[0]      # dimension of delayed (augmented) state
+        f_orig = ref.f_orig
+
+        if x0_arr.shape[0] == fq:
+            # Already in augmented space
+            tilt_x0 = x0_arr
+        elif x0_arr.shape[0] == f_orig and x0_arr.shape[1] > 1:
+            # Original (f_orig x q) -> reduce with U_dr, then stack as Hankel block
+            tilt_x0 = ref._U_dr.T @ x0_arr       # (rank_dr x q)
+            tilt_x0 = tilt_x0.reshape(-1, 1, order="F")  # (rank_dr*q, 1) == fq x 1
+        else:
+            raise ValueError(
+                f"x0 has shape {x0_arr.shape}; expected ({f_orig}, q) or ({fq}, 1)."
+            )
+
+        # --- Prepare delayed controls Ud (matching Btilde rows) ---
+        mu_expected = dmdc0["Btilde"].shape[1]   # rows expected for control in reduced space
+
+        U = np.asarray(U_tgt_ext)
+        # For time-delayed DMDc: either already delayed, or embed here
+        if U.shape[0] == mu_expected:
+            Ud = U
+        else:
+            # Use the same embedding policy as TimeDelayedDMDc
+            Ud = ref._delay_embed_state(U, ref.qu, step=ref.stepU)
+
+        if Ud.shape[0] != mu_expected:
+            raise ValueError(
+                f"After delay embedding, control rows={Ud.shape[0]} "
+                f"but Btilde expects {mu_expected}"
+            )
+
+        Tm1 = Ud.shape[1]  # number of transitions
+        T = Tm1 + 1
+
+        # --- Collect operators (basis, Atilde, Btilde) and check shapes ---
+        models = []
+        rank_dr = ref.rank_dr
+        for ds in D:
+            dmdc = ds.dmdc
+            Phi = dmdc["basis"]
+            Atilde = dmdc["Atilde"]
+            Btilde = dmdc["Btilde"]
+
+            # Check augmented dim and control dim
+            if Phi.shape[0] != fq:
+                raise ValueError(
+                    "All DMDc bases must act on the same augmented dimension: "
+                    f"expected {fq}, got {Phi.shape[0]} for dataset "
+                    f"{ds.reference_dic.get('signal','?')}"
+                )
+            if Btilde.shape[1] != mu_expected:
+                raise ValueError(
+                    "All DMDc operators must expect the same control dimension: "
+                    f"expected {mu_expected}, got {Btilde.shape[1]}"
+                )
+            if ds.rank_dr != rank_dr:
+                raise ValueError(
+                    "All datasets must use the same rank_dr for operator shuffling: "
+                    f"expected {rank_dr}, got {ds.rank_dr}"
+                )
+
+            models.append((Phi, Atilde, Btilde))
+
+        # --- Multi-operator rollout in augmented space ---
+        #
+        # Keep state in augmented space fq.
+        # For each step k:
+        #   i = (k // steps_per_model) % n_models
+        #   use models[i] to advance the state.
+
+        x_aug = tilt_x0.copy()          # (fq x 1)
+        X_aug_cols = [x_aug]
+
+        for k in range(Tm1):
+            model_idx = (k // steps_per_model) % n_models
+            Phi_i, Atilde_i, Btilde_i = models[model_idx]
+
+            # Reduced coordinates for this operator
+            z_k = Phi_i.T @ x_aug       # (r x 1)
+            u_k = Ud[:, k:k+1]          # (mu_expected x 1)
+
+            z_next = Atilde_i @ z_k + Btilde_i @ u_k
+            x_next = Phi_i @ z_next     # back to augmented space (fq x 1)
+
+            X_aug_cols.append(x_next)
+            x_aug = x_next
+
+        X_aug = np.hstack(X_aug_cols)   # (fq x T)
+
+        # --- Map back to ORIGINAL physical space (like TimeDelayedDMDc) ---
+        if ref._U_dr.shape[1] < rank_dr:
+            raise ValueError(
+                f"U_dr has only {ref._U_dr.shape[1]} columns; expected at least {rank_dr}"
+            )
+
+        X_pred = ref._U_dr @ X_aug[-rank_dr:, :]   # (f_orig x T)
+
+        # --- Split back into fields, keep data structure the same as before ---
+        def get_field_block(X, field_idx):
+            n = ref.n_points
+            r0 = field_idx * n
+            r1 = (field_idx + 1) * n
+            return X[r0:r1, :]
+
+        pred_block = {sig_name: {}}
+        for f_idx, f_name in enumerate(ref.field_names):
+            pred_block[sig_name][f_name] = get_field_block(X_pred, f_idx)
+
+        # Use a single "source signal" key for the shuffled prediction
+        src_signal = str(ref.reference_dic.get("signal", "shuffled"))
+        data = {src_signal: [pred_block, omega_act]}
+
+        return data
+
+    def plot_error_time_series_for_target_signal(self, tgt_signal):
+
+        if not hasattr(self, "datasets") or not self.datasets:
+            raise ValueError("No datasets provided to DMDcPlotter.")
+        lbl_tgt = str(tgt_signal.reference_dic.get("signal", f"dataset_tgt"))
+        D = self.datasets
+        N = len(D)
+        labels = [
+            str(ds.reference_dic.get("signal", f"dataset_{k}"))
+            for k, ds in enumerate(D)
+        ]
+        # Ensure each ds has a FITTED model and dt set
+        for ds in D:
+            if not hasattr(ds, "dmdc"):
+                raise AttributeError(
+                    f"{ds} is missing `dmdc`. Create with ds.makeDMDcModel(...) first."
+                )
+
+        series_list = []   # list of np.arrays of per-step errors
+
+        # Core cross-prediction table
+        for j, src_dataset in enumerate(D):
+            X_true = tgt_signal.state_matrix  # (features x Tj)
+            q = getattr(src_dataset, "q", 1)
+
+            x0     = tgt_signal.x_ini              # (F x q), aligned with target grid
+            #X_true = tgt.state_matrix          # (F x T)
+            U_tgt  = tgt_signal.signal_matrix_act         # (m x (T-1))
+
+            pad_cols = x0.shape[1]         # same number of columns as x0
+
+            m, _ = U_tgt.shape
+            U_tgt_ext = np.asarray(np.hstack([
+                np.zeros((m, pad_cols)),   # zero padding (m x pad_cols)
+                U_tgt                      # original (m x (T-1))
+            ]), dtype = np.float32)
+
+
+            X_pred = src_dataset.time_march_dmdc(src_dataset.dmdc, U_tgt_ext, x0)  # (F x T_pred)
+
+
+            T = X_true.shape[1]
+            errs = []
+            for t in range(T):
+                num = np.linalg.norm(X_true[:, t] - X_pred[:, t])
+                den = np.linalg.norm(X_true[:, t])
+                errs.append(num / den if den > 0 else np.nan)
+            series_list.append(np.asarray(errs))
+
+        #times_list = tgt_signal.times_used_act
+        times_actual = np.asarray(tgt_signal.times_used_act, dtype="float64")
+        dt = times_actual[1] - times_actual[0]
+        start_actual = times_actual[0]-dt
+        times_actual = np.concatenate(([start_actual], times_actual))
+
+        fig, ax = plt.subplots(figsize=(8, 4.5))
+        for lbl, ser in zip(labels, series_list):
+            ax.plot(times_actual, ser, marker='.', linewidth=1.0, label=lbl)
+        ax.set_xlabel("time index t")
+        ax.set_ylabel("normalized per-step error")
+        ax.set_title(f"Time series cross-prediction error for {lbl_tgt}")
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc="best", fontsize=9)
+        plt.tight_layout()
+        plt.show()
+        return series_list, times_actual, labels
+    
+    def plot_error_time_series_for_target_signal_using_shuffling(self, tgt_signal, steps_per_model: int = 1):
+        """
+        Build a single prediction by shuffling *operators* per time step.
+
+        We replicate the logic of TimeDelayedDMDc.time_march_dmdc +
+        DMDcDataset.time_march_dmdc, but instead of a single DMDc model,
+        we use the list of models from self.datasets in a round-robin way:
+
+            for k-th time step:
+                model_index = (k // steps_per_model) % n_models
+
+        All datasets are assumed to share the same U_dr, rank_dr, q, qu, step,
+        stepU and f_orig, so that the augmented state space is consistent.
+        """
+
+        if steps_per_model < 1:
+            raise ValueError("steps_per_model must be >= 1")
+
+        if not hasattr(self, "datasets") or not self.datasets:
+            raise ValueError("No datasets provided to DMDcPlotter.")
+
+        D = self.datasets
+        n_models = len(D)
+
+        # Sanity: all must have fitted dmdc and shared dimensionality
+        for ds in D:
+            if not hasattr(ds, "dmdc"):
+                raise AttributeError("One of the datasets is missing `dmdc`. Fit it first.")
+
+        # Reference dataset for shapes / delay params / U_dr
+        ref = D[0]
+        dmdc0 = ref.dmdc
+
+        # --- Target signal info (same for all operators) ---
+        sig_name = tgt_signal.reference_dic.get("signal", "")
+        x0 = tgt_signal.x_ini                    # (f_orig x q) on target grid
+        U_tgt = tgt_signal.signal_matrix_act     # (m x (T-1))
+
+        pad_cols = x0.shape[1]                   # q
+        m, _ = U_tgt.shape
+        U_tgt_ext = np.asarray(
+            np.hstack(
+                [
+                    np.zeros((m, pad_cols)),     # zero padding to align with delay
+                    U_tgt,
+                ]
+            ),
+            dtype=np.float32,
+        )
+
+        # --- Build time vector and omega_act (same as before) ---
+        times_actual = np.asarray(tgt_signal.times_used_act, dtype="float64")
+        dt = times_actual[1] - times_actual[0]
+        start_actual = times_actual[0] - dt
+        times_actual = np.concatenate(([start_actual], times_actual))
+        omega = tgt_signal.f_omega(times_actual)
+        omega_act = {sig_name: np.column_stack((times_actual, omega))}
+
+        # --- Prepare augmented initial state (tilt_x0) in delayed space ---
+        x0_arr = np.asarray(x0)
+        if x0_arr.ndim == 1:
+            x0_arr = x0_arr[:, None]
+
+        q = ref.q
+        fq = dmdc0["basis"].shape[0]      # dimension of delayed (augmented) state
+        f_orig = ref.f_orig
+
+        if x0_arr.shape[0] == fq:
+            # Already in augmented space
+            tilt_x0 = x0_arr
+        elif x0_arr.shape[0] == f_orig and x0_arr.shape[1] > 1:
+            # Original (f_orig x q) -> reduce with U_dr, then stack as Hankel block
+            tilt_x0 = ref._U_dr.T @ x0_arr       # (rank_dr x q)
+            tilt_x0 = tilt_x0.reshape(-1, 1, order="F")  # (rank_dr*q, 1) == fq x 1
+        else:
+            raise ValueError(
+                f"x0 has shape {x0_arr.shape}; expected ({f_orig}, q) or ({fq}, 1)."
+            )
+
+        # --- Prepare delayed controls Ud (matching Btilde rows) ---
+        mu_expected = dmdc0["Btilde"].shape[1]   # rows expected for control in reduced space
+
+        U = np.asarray(U_tgt_ext)
+        # For time-delayed DMDc: either already delayed, or embed here
+        if U.shape[0] == mu_expected:
+            Ud = U
+        else:
+            # Use the same embedding policy as TimeDelayedDMDc
+            Ud = ref._delay_embed_state(U, ref.qu, step=ref.stepU)
+
+        if Ud.shape[0] != mu_expected:
+            raise ValueError(
+                f"After delay embedding, control rows={Ud.shape[0]} "
+                f"but Btilde expects {mu_expected}"
+            )
+
+        Tm1 = Ud.shape[1]  # number of transitions
+        T = Tm1 + 1
+
+        # --- Collect operators (basis, Atilde, Btilde) and check shapes ---
+        models = []
+        rank_dr = ref.rank_dr
+        for ds in D:
+            dmdc = ds.dmdc
+            Phi = dmdc["basis"]
+            Atilde = dmdc["Atilde"]
+            Btilde = dmdc["Btilde"]
+
+            # Check augmented dim and control dim
+            if Phi.shape[0] != fq:
+                raise ValueError(
+                    "All DMDc bases must act on the same augmented dimension: "
+                    f"expected {fq}, got {Phi.shape[0]} for dataset "
+                    f"{ds.reference_dic.get('signal','?')}"
+                )
+            if Btilde.shape[1] != mu_expected:
+                raise ValueError(
+                    "All DMDc operators must expect the same control dimension: "
+                    f"expected {mu_expected}, got {Btilde.shape[1]}"
+                )
+            if ds.rank_dr != rank_dr:
+                raise ValueError(
+                    "All datasets must use the same rank_dr for operator shuffling: "
+                    f"expected {rank_dr}, got {ds.rank_dr}"
+                )
+
+            models.append((Phi, Atilde, Btilde))
+
+        # --- Multi-operator rollout in augmented space ---
+        #
+        # Keep state in augmented space fq.
+        # For each step k:
+        #   i = (k // steps_per_model) % n_models
+        #   use models[i] to advance the state.
+
+        x_aug = tilt_x0.copy()          # (fq x 1)
+        X_aug_cols = [x_aug]
+
+        for k in range(Tm1):
+            model_idx = (k // steps_per_model) % n_models
+            Phi_i, Atilde_i, Btilde_i = models[model_idx]
+
+            # Reduced coordinates for this operator
+            z_k = Phi_i.T @ x_aug       # (r x 1)
+            u_k = Ud[:, k:k+1]          # (mu_expected x 1)
+
+            z_next = Atilde_i @ z_k + Btilde_i @ u_k
+            x_next = Phi_i @ z_next     # back to augmented space (fq x 1)
+
+            X_aug_cols.append(x_next)
+            x_aug = x_next
+
+        X_aug = np.hstack(X_aug_cols)   # (fq x T)
+
+        # --- Map back to ORIGINAL physical space (like TimeDelayedDMDc) ---
+        if ref._U_dr.shape[1] < rank_dr:
+            raise ValueError(
+                f"U_dr has only {ref._U_dr.shape[1]} columns; expected at least {rank_dr}"
+            )
+
+        X_pred = ref._U_dr @ X_aug[-rank_dr:, :]   # (f_orig x T)
+        X_true = tgt_signal.state_matrix  # (features x Tj)
+        lbl_tgt = str(tgt_signal.reference_dic.get("signal", f"dataset_tgt"))
+
+        T = X_true.shape[1]
+        errs = []
+        for t in range(T):
+            num = np.linalg.norm(X_true[:, t] - X_pred[:, t])
+            den = np.linalg.norm(X_true[:, t])
+            errs.append(num / den if den > 0 else np.nan)
+
+        times_actual = np.asarray(tgt_signal.times_used_act, dtype="float64")
+        dt = times_actual[1] - times_actual[0]
+        start_actual = times_actual[0]-dt
+        times_actual = np.concatenate(([start_actual], times_actual))
+
+
+        fig, ax = plt.subplots(figsize=(8, 4.5))
+        ax.plot(times_actual, errs, marker='.', linewidth=1.0, label="MOSS")
+        ax.set_xlabel("time index t")
+        ax.set_ylabel("normalized per-step error")
+        ax.set_title(f"Time series cross-prediction error for {lbl_tgt}")
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc="best", fontsize=9)
+        plt.tight_layout()
+        plt.show()
+        return errs, times_actual
+
+    def get_predictions_for_signal_using_MORS(self, tgt_signal, steps_per_model: int = 1):
+        """
+        Build a single prediction by shuffling *operators* per time step.
+
+        We replicate the logic of TimeDelayedDMDc.time_march_dmdc +
+        DMDcDataset.time_march_dmdc, but instead of a single DMDc model,
+        we use the list of models from self.datasets in a round-robin way:
+
+            for k-th time step:
+                model_index = (k // steps_per_model) % n_models
+
+        All datasets are assumed to share the same U_dr, rank_dr, q, qu, step,
+        stepU and f_orig, so that the augmented state space is consistent.
+        """
+
+        if steps_per_model < 1:
+            raise ValueError("steps_per_model must be >= 1")
+
+        if not hasattr(self, "datasets") or not self.datasets:
+            raise ValueError("No datasets provided to DMDcPlotter.")
+
+        D = self.datasets
+        n_models = len(D)
+
+        # Sanity: all must have fitted dmdc and shared dimensionality
+        for ds in D:
+            if not hasattr(ds, "dmdc"):
+                raise AttributeError("One of the datasets is missing `dmdc`. Fit it first.")
+
+        # Reference dataset for shapes / delay params / U_dr
+        ref = D[0]
+        dmdc0 = ref.dmdc
+
+        # --- Target signal info (same for all operators) ---
+        sig_name = tgt_signal.reference_dic.get("signal", "")
+        x0 = tgt_signal.x_ini                    # (f_orig x q) on target grid
+        U_tgt = tgt_signal.signal_matrix_act     # (m x (T-1))
+
+        pad_cols = x0.shape[1]                   # q
+        m, _ = U_tgt.shape
+        U_tgt_ext = np.asarray(
+            np.hstack(
+                [
+                    np.zeros((m, pad_cols)),     # zero padding to align with delay
+                    U_tgt,
+                ]
+            ),
+            dtype=np.float32,
+        )
+
+        # --- Build time vector and omega_act (same as before) ---
+        times_actual = np.asarray(tgt_signal.times_used_act, dtype="float64")
+        dt = times_actual[1] - times_actual[0]
+        start_actual = times_actual[0] - dt
+        times_actual = np.concatenate(([start_actual], times_actual))
+        omega = tgt_signal.f_omega(times_actual)
+        omega_act = {sig_name: np.column_stack((times_actual, omega))}
+
+        # --- Prepare augmented initial state (tilt_x0) in delayed space ---
+        x0_arr = np.asarray(x0)
+        if x0_arr.ndim == 1:
+            x0_arr = x0_arr[:, None]
+
+        q = ref.q
+        fq = dmdc0["basis"].shape[0]      # dimension of delayed (augmented) state
+        f_orig = ref.f_orig
+
+        if x0_arr.shape[0] == fq:
+            # Already in augmented space
+            tilt_x0 = x0_arr
+        elif x0_arr.shape[0] == f_orig and x0_arr.shape[1] > 1:
+            # Original (f_orig x q) -> reduce with U_dr, then stack as Hankel block
+            tilt_x0 = ref._U_dr.T @ x0_arr       # (rank_dr x q)
+            tilt_x0 = tilt_x0.reshape(-1, 1, order="F")  # (rank_dr*q, 1) == fq x 1
+        else:
+            raise ValueError(
+                f"x0 has shape {x0_arr.shape}; expected ({f_orig}, q) or ({fq}, 1)."
+            )
+
+        # --- Prepare delayed controls Ud (matching Btilde rows) ---
+        mu_expected = dmdc0["Btilde"].shape[1]   # rows expected for control in reduced space
+
+        U = np.asarray(U_tgt_ext)
+        # For time-delayed DMDc: either already delayed, or embed here
+        if U.shape[0] == mu_expected:
+            Ud = U
+        else:
+            # Use the same embedding policy as TimeDelayedDMDc
+            Ud = ref._delay_embed_state(U, ref.qu, step=ref.stepU)
+
+        if Ud.shape[0] != mu_expected:
+            raise ValueError(
+                f"After delay embedding, control rows={Ud.shape[0]} "
+                f"but Btilde expects {mu_expected}"
+            )
+
+        Tm1 = Ud.shape[1]  # number of transitions
+        T = Tm1 + 1
+
+        # --- Collect operators (basis, Atilde, Btilde) and check shapes ---
+        models = []
+        rank_dr = ref.rank_dr
+        for ds in D:
+            dmdc = ds.dmdc
+            Phi = dmdc["basis"]
+            Atilde = dmdc["Atilde"]
+            Btilde = dmdc["Btilde"]
+
+            # Check augmented dim and control dim
+            if Phi.shape[0] != fq:
+                raise ValueError(
+                    "All DMDc bases must act on the same augmented dimension: "
+                    f"expected {fq}, got {Phi.shape[0]} for dataset "
+                    f"{ds.reference_dic.get('signal','?')}"
+                )
+            if Btilde.shape[1] != mu_expected:
+                raise ValueError(
+                    "All DMDc operators must expect the same control dimension: "
+                    f"expected {mu_expected}, got {Btilde.shape[1]}"
+                )
+            if ds.rank_dr != rank_dr:
+                raise ValueError(
+                    "All datasets must use the same rank_dr for operator shuffling: "
+                    f"expected {rank_dr}, got {ds.rank_dr}"
+                )
+
+            models.append((Phi, Atilde, Btilde))
+
+        # --- Multi-operator rollout in augmented space ---
+        #
+        # Keep state in augmented space fq.
+        # For each step k:
+        #   i = (k // steps_per_model) % n_models
+        #   use models[i] to advance the state.
+
+        x_aug = tilt_x0.copy()          # (fq x 1)
+        X_aug_cols = [x_aug]
+        np.random.seed(0)     # or expose as function argument if you want
+        current_model_idx = np.random.randint(n_models)
+
+        for k in range(Tm1):
+
+            if k % steps_per_model == 0 and k > 0:
+                current_model_idx = np.random.randint(n_models)
+
+            Phi_i, Atilde_i, Btilde_i = models[current_model_idx]
+
+            # Reduced coordinates for this operator
+            z_k = Phi_i.T @ x_aug       # (r x 1)
+            u_k = Ud[:, k:k+1]          # (mu_expected x 1)
+
+            z_next = Atilde_i @ z_k + Btilde_i @ u_k
+            x_next = Phi_i @ z_next     # back to augmented space (fq x 1)
+
+            X_aug_cols.append(x_next)
+            x_aug = x_next
+
+        X_aug = np.hstack(X_aug_cols)   # (fq x T)
+
+        # --- Map back to ORIGINAL physical space (like TimeDelayedDMDc) ---
+        if ref._U_dr.shape[1] < rank_dr:
+            raise ValueError(
+                f"U_dr has only {ref._U_dr.shape[1]} columns; expected at least {rank_dr}"
+            )
+
+        X_pred = ref._U_dr @ X_aug[-rank_dr:, :]   # (f_orig x T)
+
+        # --- Split back into fields, keep data structure the same as before ---
+        def get_field_block(X, field_idx):
+            n = ref.n_points
+            r0 = field_idx * n
+            r1 = (field_idx + 1) * n
+            return X[r0:r1, :]
+
+        pred_block = {sig_name: {}}
+        for f_idx, f_name in enumerate(ref.field_names):
+            pred_block[sig_name][f_name] = get_field_block(X_pred, f_idx)
+
+        # Use a single "source signal" key for the shuffled prediction
+        src_signal = str(ref.reference_dic.get("signal", "shuffled"))
+        data = {src_signal: [pred_block, omega_act]}
+
+        return data
+
+
+    def plot_error_time_series_for_target_signal_using_MORS(self, tgt_signal, steps_per_model: int = 1):
+        """
+        Build a single prediction by shuffling *operators* per time step.
+
+        We replicate the logic of TimeDelayedDMDc.time_march_dmdc +
+        DMDcDataset.time_march_dmdc, but instead of a single DMDc model,
+        we use the list of models from self.datasets in a round-robin way:
+
+            for k-th time step:
+                model_index = (k // steps_per_model) % n_models
+
+        All datasets are assumed to share the same U_dr, rank_dr, q, qu, step,
+        stepU and f_orig, so that the augmented state space is consistent.
+        """
+
+        if steps_per_model < 1:
+            raise ValueError("steps_per_model must be >= 1")
+
+        if not hasattr(self, "datasets") or not self.datasets:
+            raise ValueError("No datasets provided to DMDcPlotter.")
+
+        D = self.datasets
+        n_models = len(D)
+
+        # Sanity: all must have fitted dmdc and shared dimensionality
+        for ds in D:
+            if not hasattr(ds, "dmdc"):
+                raise AttributeError("One of the datasets is missing `dmdc`. Fit it first.")
+
+        # Reference dataset for shapes / delay params / U_dr
+        ref = D[0]
+        dmdc0 = ref.dmdc
+
+        # --- Target signal info (same for all operators) ---
+        sig_name = tgt_signal.reference_dic.get("signal", "")
+        x0 = tgt_signal.x_ini                    # (f_orig x q) on target grid
+        U_tgt = tgt_signal.signal_matrix_act     # (m x (T-1))
+
+        pad_cols = x0.shape[1]                   # q
+        m, _ = U_tgt.shape
+        U_tgt_ext = np.asarray(
+            np.hstack(
+                [
+                    np.zeros((m, pad_cols)),     # zero padding to align with delay
+                    U_tgt,
+                ]
+            ),
+            dtype=np.float32,
+        )
+
+        # --- Build time vector and omega_act (same as before) ---
+        times_actual = np.asarray(tgt_signal.times_used_act, dtype="float64")
+        dt = times_actual[1] - times_actual[0]
+        start_actual = times_actual[0] - dt
+        times_actual = np.concatenate(([start_actual], times_actual))
+        omega = tgt_signal.f_omega(times_actual)
+        omega_act = {sig_name: np.column_stack((times_actual, omega))}
+
+        # --- Prepare augmented initial state (tilt_x0) in delayed space ---
+        x0_arr = np.asarray(x0)
+        if x0_arr.ndim == 1:
+            x0_arr = x0_arr[:, None]
+
+        q = ref.q
+        fq = dmdc0["basis"].shape[0]      # dimension of delayed (augmented) state
+        f_orig = ref.f_orig
+
+        if x0_arr.shape[0] == fq:
+            # Already in augmented space
+            tilt_x0 = x0_arr
+        elif x0_arr.shape[0] == f_orig and x0_arr.shape[1] > 1:
+            # Original (f_orig x q) -> reduce with U_dr, then stack as Hankel block
+            tilt_x0 = ref._U_dr.T @ x0_arr       # (rank_dr x q)
+            tilt_x0 = tilt_x0.reshape(-1, 1, order="F")  # (rank_dr*q, 1) == fq x 1
+        else:
+            raise ValueError(
+                f"x0 has shape {x0_arr.shape}; expected ({f_orig}, q) or ({fq}, 1)."
+            )
+
+        # --- Prepare delayed controls Ud (matching Btilde rows) ---
+        mu_expected = dmdc0["Btilde"].shape[1]   # rows expected for control in reduced space
+
+        U = np.asarray(U_tgt_ext)
+        # For time-delayed DMDc: either already delayed, or embed here
+        if U.shape[0] == mu_expected:
+            Ud = U
+        else:
+            # Use the same embedding policy as TimeDelayedDMDc
+            Ud = ref._delay_embed_state(U, ref.qu, step=ref.stepU)
+
+        if Ud.shape[0] != mu_expected:
+            raise ValueError(
+                f"After delay embedding, control rows={Ud.shape[0]} "
+                f"but Btilde expects {mu_expected}"
+            )
+
+        Tm1 = Ud.shape[1]  # number of transitions
+        T = Tm1 + 1
+
+        # --- Collect operators (basis, Atilde, Btilde) and check shapes ---
+        models = []
+        rank_dr = ref.rank_dr
+        for ds in D:
+            dmdc = ds.dmdc
+            Phi = dmdc["basis"]
+            Atilde = dmdc["Atilde"]
+            Btilde = dmdc["Btilde"]
+
+            # Check augmented dim and control dim
+            if Phi.shape[0] != fq:
+                raise ValueError(
+                    "All DMDc bases must act on the same augmented dimension: "
+                    f"expected {fq}, got {Phi.shape[0]} for dataset "
+                    f"{ds.reference_dic.get('signal','?')}"
+                )
+            if Btilde.shape[1] != mu_expected:
+                raise ValueError(
+                    "All DMDc operators must expect the same control dimension: "
+                    f"expected {mu_expected}, got {Btilde.shape[1]}"
+                )
+            if ds.rank_dr != rank_dr:
+                raise ValueError(
+                    "All datasets must use the same rank_dr for operator shuffling: "
+                    f"expected {rank_dr}, got {ds.rank_dr}"
+                )
+
+            models.append((Phi, Atilde, Btilde))
+
+        # --- Multi-operator rollout in augmented space ---
+        #
+        # Keep state in augmented space fq.
+        # For each step k:
+        #   i = (k // steps_per_model) % n_models
+        #   use models[i] to advance the state.
+        np.random.seed(0)  # reproducible random operator schedule
+
+        x_aug = tilt_x0.copy()          # (fq x 1)
+        X_aug_cols = [x_aug]
+
+        # initialize with a random model for the first block
+        current_model_idx = np.random.randint(n_models)
+
+        for k in range(Tm1):
+            # every steps_per_model steps, choose a new random model index
+            if k % steps_per_model == 0 and k > 0:
+                current_model_idx = np.random.randint(n_models)
+
+            Phi_i, Atilde_i, Btilde_i = models[current_model_idx]
+            # Reduced coordinates for this operator
+            z_k = Phi_i.T @ x_aug       # (r x 1)
+            u_k = Ud[:, k:k+1]          # (mu_expected x 1)
+
+            z_next = Atilde_i @ z_k + Btilde_i @ u_k
+            x_next = Phi_i @ z_next     # back to augmented space (fq x 1)
+
+            X_aug_cols.append(x_next)
+            x_aug = x_next
+
+        X_aug = np.hstack(X_aug_cols)   # (fq x T)
+
+        # --- Map back to ORIGINAL physical space (like TimeDelayedDMDc) ---
+        if ref._U_dr.shape[1] < rank_dr:
+            raise ValueError(
+                f"U_dr has only {ref._U_dr.shape[1]} columns; expected at least {rank_dr}"
+            )
+
+        X_pred = ref._U_dr @ X_aug[-rank_dr:, :]   # (f_orig x T)
+        X_true = tgt_signal.state_matrix  # (features x Tj)
+        lbl_tgt = str(tgt_signal.reference_dic.get("signal", f"dataset_tgt"))
+
+        T = X_true.shape[1]
+        errs = []
+        for t in range(T):
+            num = np.linalg.norm(X_true[:, t] - X_pred[:, t])
+            den = np.linalg.norm(X_true[:, t])
+            errs.append(num / den if den > 0 else np.nan)
+
+        times_actual = np.asarray(tgt_signal.times_used_act, dtype="float64")
+        dt = times_actual[1] - times_actual[0]
+        start_actual = times_actual[0]-dt
+        times_actual = np.concatenate(([start_actual], times_actual))
+
+
+        fig, ax = plt.subplots(figsize=(8, 4.5))
+        ax.plot(times_actual, errs, marker='.', linewidth=1.0, label="MOSS")
+        ax.set_xlabel("time index t")
+        ax.set_ylabel("normalized per-step error")
+        ax.set_title(f"Time series cross-prediction error for {lbl_tgt}")
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc="best", fontsize=9)
+        plt.tight_layout()
+        plt.show()
+        return errs, times_actual

@@ -1,0 +1,44 @@
+----------- Running Command ----------
+COMMAND: /home/tanuj/Masters_Thesis/SVD/venv1/lib/python3.11/site-packages/smartsim/_core/bin/redis-server /home/tanuj/Masters_Thesis/SVD/venv1/lib/python3.11/site-packages/smartsim/_core/config/redis.conf --loadmodule /home/tanuj/Masters_Thesis/SVD/venv1/lib/python3.11/site-packages/smartsim/_core/lib/redisai.so --port 3999 --bind 127.0.0.1 --bind-source-addr 127.0.0.1
+IPADDRESS: 127.0.0.1
+NETWORK: lo
+SMARTSIM_ORC_SHARD_INFO: {"name": "orchestrator_0", "hostname": "127.0.0.1", "port": 3999, "cluster": false}
+--------------------------------------
+
+--------------- Output ---------------
+
+
+6820:C 14 Jan 2026 17:10:24.310 # WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.
+6820:C 14 Jan 2026 17:10:24.310 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo
+6820:C 14 Jan 2026 17:10:24.310 * Redis version=7.2.4, bits=64, commit=d2c8a4b9, modified=0, pid=6820, just started
+6820:C 14 Jan 2026 17:10:24.310 * Configuration loaded
+6820:M 14 Jan 2026 17:10:24.311 * Increased maximum number of open files to 50032 (it was originally set to 1024).
+6820:M 14 Jan 2026 17:10:24.311 * monotonic clock: POSIX clock_gettime
+6820:M 14 Jan 2026 17:10:24.312 # Failed to write PID file: Permission denied
+                _._
+           _.-``__ ''-._
+      _.-``    `.  `_.  ''-._           Redis 7.2.4 (d2c8a4b9/0) 64 bit
+  .-`` .-```.  ```\/    _.,_ ''-._
+ (    '      ,       .-`  | `,    )     Running in standalone mode
+ |`-._`-...-` __...-.``-._|'` _.-'|     Port: 3999
+ |    `-._   `._    /     _.-'    |     PID: 6820
+  `-._    `-._  `-./  _.-'    _.-'
+ |`-._`-._    `-.__.-'    _.-'_.-'|
+ |    `-._`-._        _.-'_.-'    |           https://redis.io
+  `-._    `-._`-.__.-'_.-'    _.-'
+ |`-._`-._    `-.__.-'    _.-'_.-'|
+ |    `-._`-._        _.-'_.-'    |
+  `-._    `-._`-.__.-'_.-'    _.-'
+      `-._    `-.__.-'    _.-'
+          `-._        _.-'
+              `-.__.-'
+
+6820:M 14 Jan 2026 17:10:24.313 * <ai> Redis version found by RedisAI: 7.2.4 - oss
+6820:M 14 Jan 2026 17:10:24.313 * <ai> RedisAI version 10207, git_sha=unknown
+6820:M 14 Jan 2026 17:10:24.313 * Module 'ai' loaded from /home/tanuj/Masters_Thesis/SVD/venv1/lib/python3.11/site-packages/smartsim/_core/lib/redisai.so
+6820:M 14 Jan 2026 17:10:24.313 * Server initialized
+6820:M 14 Jan 2026 17:10:24.313 * Ready to accept connections tcp
+6820:M 14 Jan 2026 17:10:55.515 * User requested shutdown...
+6820:M 14 Jan 2026 17:10:55.515 * <ai> Clearing resources on shutdown
+6820:M 14 Jan 2026 17:10:55.515 * Removing the pid file.
+6820:M 14 Jan 2026 17:10:55.515 # Redis is now ready to exit, bye bye...

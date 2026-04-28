@@ -1,0 +1,19 @@
+u_inlet: 1.0          # inlet velocity magnitude (used for normalization)
+dim: "2D"             # "2D" or "3D"
+radius: 0.05           # cylinder radius (for converting omega -> tangential velocity)
+
+svd_rank: 20          # default, overwritten if model specifies svd_rank
+dmdc_path: "models_lib/chirp_varying_amp_dmdc.pkl"
+
+policy: "policy.pt"        # TorchScript policy file
+absOmegaMax: 5.0          # max rotation rate magnitude
+seed: 1234                 # RNG seed for sampling in training
+train: true                # true = sample Beta distribution, false = deterministic mean
+
+timeStart: 4.0             # time at which control begins (from probes dict)
+executeInterval: 0.01      # dt_control – time between control actions (same as probes)
+n_steps: 400               # number of ROM–OpenFOAM control iterations
+n_probes: 12
+mpi_ranks: 2
+time_stride: 1            # for naming keys in SmartRedis
+fo_name: "dataToSmartRedis"

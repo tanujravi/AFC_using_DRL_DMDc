@@ -1,0 +1,4 @@
+17:10:23 A380 __main__.orchestrator_0-DFOFYZBZ2PG0[6752:MainThread] INFO Indirect proxy 6752 child process 6795 started
+17:10:23 A380 __main__.orchestrator_0-DFOFYZBZ2PG0[6752:MainThread] INFO Waiting for child process 6795 to complete
+17:10:55 A380 __main__.orchestrator_0-DFOFYZBZ2PG0[6752:MainThread] INFO Indirect proxy 6752 child process 6795 complete. return code: 0
+17:10:55 A380 __main__.orchestrator_0-DFOFYZBZ2PG0[6752:MainThread] INFO Performing cleanup

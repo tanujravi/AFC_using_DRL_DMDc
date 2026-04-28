@@ -1,0 +1,4 @@
+17:10:35 A380 __main__.svdToFoam_r20_field_name_p_tgt_DRL_signal_src_Random_walk-DFOFZ4L2JT83[6837:MainThread] INFO Indirect proxy 6837 child process 6859 started
+17:10:35 A380 __main__.svdToFoam_r20_field_name_p_tgt_DRL_signal_src_Random_walk-DFOFZ4L2JT83[6837:MainThread] INFO Waiting for child process 6859 to complete
+17:10:38 A380 __main__.svdToFoam_r20_field_name_p_tgt_DRL_signal_src_Random_walk-DFOFZ4L2JT83[6837:MainThread] INFO Indirect proxy 6837 child process 6859 complete. return code: 0
+17:10:38 A380 __main__.svdToFoam_r20_field_name_p_tgt_DRL_signal_src_Random_walk-DFOFZ4L2JT83[6837:MainThread] INFO Performing cleanup

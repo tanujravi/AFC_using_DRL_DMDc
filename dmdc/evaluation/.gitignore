@@ -1,5 +1,7 @@
-notebooks
 eval.py
 __py*
 .ipy*
 temp
+plots
+plots*
+exports

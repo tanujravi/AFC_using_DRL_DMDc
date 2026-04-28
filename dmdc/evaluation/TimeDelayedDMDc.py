@@ -37,21 +37,23 @@ class TimeDelayedDMDc(DMDcDataset):
     """
 
     def __init__(
-        self, folder_path, reference_dic, start_time=4.0, dim="2d", q=5, qu = 5,  step=1, stepU = 1, rank_dr = 30, verbose = True
+        self, folder_path, reference_dic, start_time=4.0, start_time_act = 4.0, dim="2d", q=5, qu = 5,  step=1, stepU = 1, rank_dr = 30, verbose = True, U_dr = None
     ):
         """Constructor: builds base matrices and delayed (Hankel) versions."""
         self.q = int(q)
         self.qu = int(qu)
         self.step = int(step)
         self.stepU = int(stepU)
-        super().__init__(folder_path, reference_dic, start_time=start_time, dim=dim, verbose=verbose)
+        super().__init__(folder_path, reference_dic, start_time=start_time, start_time_act= start_time_act, dim=dim, verbose=verbose)
 
         self.x_ini = self.state_matrix_ini[:, -self.q:]
         # f = n_points * len(field_names)
         self.f_orig = self.state_matrix.shape[0]
         # Build delayed matrices
-        self._U_dr = np.linalg.svd(self.state_matrix, full_matrices = False)[0][:,:rank_dr]
-
+        if U_dr is None:
+            self._U_dr = np.linalg.svd(self.state_matrix, full_matrices = False)[0][:,:rank_dr]
+        else:
+            self._U_dr = U_dr[:,:rank_dr]
         self.rank_dr = rank_dr
         self._build_delay_matrices()
 
@@ -214,14 +216,17 @@ class TimeDelayedDMDc(DMDcDataset):
                 dmdc.original_time["dt"] = dt
         except Exception:
             pass
-
         self.frequency_all = dmdc.frequency
         self.eigs_real_part_all = dmdc.eigs.real
         self.eigs_imag_part_all = dmdc.eigs.imag
         self.dmdc = {
             "basis": dmdc.basis,  # (n, r)
             "Atilde": dmdc._Atilde._Atilde,  # (r, r)
+            #"Atilde": dmdc.modes @ np.diag(dmdc.eigs) @ np.linalg.pinv(dmdc.modes),  # (r, r)
+            
             "Btilde": dmdc.basis.T @ dmdc.B,  # (r, m)
+            #"Btilde": dmdc.B,  # (r, m)
+        
         }
 
     def clear_memory(self):

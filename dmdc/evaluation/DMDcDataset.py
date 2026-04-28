@@ -35,11 +35,12 @@ class DMDcDataset:
     - ``signal_matrix`` (:class:`np.ndarray`): Shape ``(m, T-1)``, here ``m=1``.
     """
 
-    def __init__(self, folder_path, reference_dic, start_time=4.0, dim="2d", verbose = True):
+    def __init__(self, folder_path, reference_dic, start_time=4.0, start_time_act = 4.0, dim="2d", verbose = True):
         """Constructor method."""
         self.folder_path = folder_path
         self.reference_dic = reference_dic
         self.start_time = start_time
+        self.start_time_act = start_time_act
         self.dim = dim
         self.verbose = verbose
         self.build_state_signal_matrix()
@@ -74,11 +75,13 @@ class DMDcDataset:
         # Find the first index whose time >= start_time
 
         time_start_idx = int(np.searchsorted(times_arr, self.start_time, side="left"))
+        time_start_idx_act = int(np.searchsorted(times_arr, self.start_time_act, side="left"))
         
         times_used = times[time_start_idx:]
 
-        times_initial = times[1:time_start_idx]
+        times_initial = times[1:time_start_idx_act]
 
+        times_used_act = times[time_start_idx_act:]
         u_inlet = float(self.reference_dic["u_inlet"])
 
         # ---- Pressure (mean-subtracted over space; normalized by u_inlet^2) ----
@@ -148,6 +151,7 @@ class DMDcDataset:
 
         self.field_names = field_names
         self.times_used = times_used
+        self.times_used_act = times_used_act
         self.state_matrix = np.vstack(components).astype(np.float32)
         self.state_matrix_ini = np.vstack(components_ini).astype(np.float32)
 
@@ -179,6 +183,11 @@ class DMDcDataset:
         omega_interp = self.f_omega(np.array(times_used[:-1]))  # shape (T,)
         u_act = omega_interp * self.reference_dic["cyl_radius"]
         self.signal_matrix = np.atleast_2d(u_act.astype(np.float32))  # shape (1, T)
+
+
+        omega_interp_act = self.f_omega(np.array(times_used_act[:-1]))  # shape (T,)
+        u_act = omega_interp_act * self.reference_dic["cyl_radius"]
+        self.signal_matrix_act = np.atleast_2d(u_act.astype(np.float32))  # shape (1, T)
 
 
     def train_test_state_signal_split(self, train_test_ratio=0.75):
@@ -245,6 +254,7 @@ class DMDcDataset:
 
         # Reduced initial state
         x_red = Phi.T @ x0  # (r,1)
+        #x_red = x0  # (r,1)
 
         # Rollout in reduced space
         Tm1 = U.shape[1]  # number of transitions
@@ -257,6 +267,7 @@ class DMDcDataset:
 
         # Lift back to full space
         X_pred = Phi @ Z  # (n, T)
+        #X_pred = Z  # (n, T)
         return X_pred
 
     def evaluate_svd_rank(self, ranks):
