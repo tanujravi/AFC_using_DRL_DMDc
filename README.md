@@ -47,7 +47,7 @@ the pipeline required for this coupling:
 
 Each folder contains its own `README.md` with detailed usage instructions for that component.
 
-## Workflow with example
+## Workflow used for the project
 
 Below is the step-by-step workflow showing how the different components are built and used. In
 the thesis this is done for the flow past a 2D cylinder. The partitioned SVD algorithm would
@@ -102,9 +102,7 @@ In the current study, no learning was observed when training with the DMDc-based
 the averaged reward remained essentially constant across training episodes. Further analysis
 showed that, despite significantly different actuation inputs, the predicted lift and drag
 histories were nearly identical. This indicates that the DMDc model built was not accurate
-enough to predict the rapid changes in dynamics associated with a typical RL actuation signal,
-and that the influence of the control operator `B` may be small relative to the unforced
-dynamics governed by the operator `A`. See the thesis (Chapter 6 and Chapter 7) for a detailed
+enough to predict the rapid changes in dynamics associated with a typical RL actuation signal. See the thesis (Chapter 6 and Chapter 7) for a detailed
 discussion and suggested directions for future work.
 
 ## Requirements
@@ -122,23 +120,6 @@ component-specific details.
   framework into which the ROM is integrated.
 - [**openfoam-smartsim**](https://github.com/OFDataCommittee/openfoam-smartsim) — provides the
   `svdToFoam` utility (a modified version is included in `auxillary/`).
-
-## Repository structure
-
-```
-.
-├── README.md                 # this file
-├── images/                   # figures referenced in the documentation
-├── dmdc/                     # signal library + DMDc model construction
-│   └── README.md
-├── partitionedSVD/           # streaming / partitioned SVD implementation
-│   └── README.md
-├── rewardEvaluation/         # lift/drag evaluation from reduced fields
-│   └── README.md
-├── integrationWithDRL/       # ROM integration into the drlfoam loop
-│   └── README.md
-└── auxillary/                # modified svdToFoam and supporting files
-```
 
 ## Report
 
