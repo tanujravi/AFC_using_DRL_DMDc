@@ -1,4 +1,0 @@
-17:10:45 A380 __main__.forces_reconstructed_fields_tgt_DRL_signal_src_Random_walk-DFOFZ9D7NLNP[6928:MainThread] INFO Indirect proxy 6928 child process 6951 started
-17:10:45 A380 __main__.forces_reconstructed_fields_tgt_DRL_signal_src_Random_walk-DFOFZ9D7NLNP[6928:MainThread] INFO Waiting for child process 6951 to complete
-17:10:50 A380 __main__.forces_reconstructed_fields_tgt_DRL_signal_src_Random_walk-DFOFZ9D7NLNP[6928:MainThread] INFO Indirect proxy 6928 child process 6951 complete. return code: 0
-17:10:50 A380 __main__.forces_reconstructed_fields_tgt_DRL_signal_src_Random_walk-DFOFZ9D7NLNP[6928:MainThread] INFO Performing cleanup
