@@ -45,7 +45,7 @@ This folder provides the tools needed to:
 
 2. **Run OpenFOAM simulations**
 
-   Use the `signal_library/cylinder2D/template` case to run OpenFOAM with the generated signal. The output data from these simulations provides the snapshot and control histories required to train DMDc.
+   Use the `signal_library/cylinder2D/template` case to run OpenFOAM with the generated signal, by copying the generated `omega.csv` into the OpenFOAM case. The output data from these simulations provides the snapshot and control histories required to train DMDc.
 
 3. **Build DMDc models**
 
@@ -55,15 +55,42 @@ This folder provides the tools needed to:
 
    The evaluation notebooks compare model predictions against validation data and help choose the best SVD rank and time-delay settings for each signal type.
 
-5. **Export models for integration**
+5. **Build the combined basis and MORS operators**
 
-   Once the DMDc model is selected, save the trained model and use its path in the `integrationWithDRL/rotatingCylinder2D/reference.yaml` configuration for DRL integration.
+   Run `dmdc/evaluation/notebooks/combined_basis.ipynb`. This notebook:
 
-## Recommended workflow
+   - Builds a shared reduced basis (`common_Ur`) by computing a combined SVD across all four
+     actuation signals (Random walk, Chirp, Chirp with varying amplitude, Amplitude-modulated)
+     using `GroupedBasis`. The basis is saved as:
+     ```
+     common_Ur.pkl          # numpy array, shape (n_state, svd_rank)
+     ```
 
-- Start with the signal generator notebook for the standard signals used in this project: random walk, chirp, chirp with varying amplitude, and amplitude-modulated.
-- Run the OpenFOAM case for each signal to collect data.
-- Use the evaluation notebooks to build and compare DMDc models, then store the best-performing models for later use.
+   - Fits a time-delayed DMDc model for each signal projected onto this common basis and saves
+     each as a pickle file containing a dictionary with the following keys:
+     ```
+     random_walk_dmdc.pkl
+     chirp_dmdc.pkl
+     chirp_varying_amp_dmdc.pkl
+     AM_dmdc.pkl
+     ```
+     Each pickle file is a dictionary with:
+     | Key | Shape | Description |
+     |-----|-------|-------------|
+     | `"basis"` | `(n_aug, r)` | Reduced basis used for the model (local, signal-specific) |
+     | `"Atilde"` | `(r, r)` | Reduced linear state transition operator |
+     | `"Btilde"` | `(r, m)` | Reduced control operator projected onto the basis |
+
+   - Tests the models against a representative DRL validation signal using both individual
+     models and the MORS strategy. The predictions (predicted state time series) are stored
+     in a compressed pickle file (`exports/data_new.pkl.gz`), which is subsequently used in
+     `rewardEvaluation/` to compute the lift and drag histories.
+
+6. **Export models for integration**
+
+   The pickle files produced in step 5 are consumed directly by the DRL integration. Point the
+   `integrationWithDRL/rotatingCylinder2D/reference.yaml` configuration to the folder containing
+   these files before running the DRL training.
 
 ## Notes
 

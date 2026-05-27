@@ -8,57 +8,81 @@ This folder contains tools to convert reduced-order model predictions into OpenF
 > source afcDrl/bin/activate
 > ```
 
-The workflow in `rewardEvaluation/` is intended to support the DRL integration by computing reward-related quantities such as lift and drag from reconstructed pressure and velocity fields.
+The workflow takes the predicted state time series produced by `dmdc/evaluation/notebooks/combined_basis.ipynb`
+and converts them into OpenFOAM fields so that the standard `forceCoeffs` post-processing utility
+can be used to extract lift and drag histories.
 
 ## Folder structure
 
-- `make_fields.py` — main script that reads predicted field data, uploads it to SmartRedis, generates OpenFOAM case directories from the template, and reconstructs fields using `svdToFoam`.
-- `plot_coeffs_combined.py` — plotting utility for comparing reconstructed force coefficients from multiple models against original OpenFOAM references.
-- `plot_coeffs_individual.py` — similar plotting utility for comparing coefficients from individual reconstructions.
-- `template/` — example OpenFOAM case template used to create the reconstructed field cases. Contains case setup files, mesh data, and `Allrun`/`Allclean` scripts.
-
-## Purpose
-
-This module provides the following capabilities:
-
-- convert DMDc-predicted scalar and vector fields into OpenFOAM-compatible format,
-- run the OpenFOAM utility `svdToFoam` in parallel to reconstruct fields for pressure (`p`) and velocity (`U`),
-- run a transient OpenFOAM solver (`pimpleFoam`) to generate force coefficients from reconstructed fields,
-- plot and compare drag (`C_d`) and lift (`C_l`) histories between reconstructed models and original baseline cases.
+- `make_fields.py` — main script that reads the predicted field data, uploads it to SmartRedis,
+  generates OpenFOAM case directories from the template, reconstructs fields using `svdToFoam`,
+  and computes force coefficients using `pimpleFoam` in post-process mode.
+- `plot_coeffs_combined.py` — plots drag (`Cd`) and lift (`Cl`) from multiple source models
+  against the original OpenFOAM reference, saving one figure per signal.
+- `plot_coeffs_individual.py` — similar to `plot_coeffs_combined.py` for individual model cases.
+- `template/` — OpenFOAM case template used to create the reconstructed field cases. Contains
+  mesh data, initial conditions, `system/controlDict`, `system/FO_force` (force function object),
+  and `Allrun`/`Allclean` scripts.
 
 ## Usage
 
-1. Prepare DMDc reconstruction data.
+1. **Prepare the input data.**
 
-   `make_fields.py` expects a pickled gzipped dataset file containing reconstructed fields and actuation histories. The file path can be passed as the first argument; otherwise it defaults to `data/data.pkl.gz`.
+   The input is the compressed pickle file produced by `combined_basis.ipynb`:
+   ```
+   exports/data_new.pkl.gz
+   ```
+   The file contains a nested dictionary structured as:
+   ```
+   data[src_model_name][0]  →  pred_block   (predicted fields per target signal)
+   data[src_model_name][1]  →  omega_block  (actuation time series per target signal)
+   ```
+   where each `pred_block[tgt_signal]` is a dict with keys `"p"`, `"u_x"`, `"u_y"` (and
+   optionally `"u_z"`), each an array of shape `(n_points, n_times)`.
 
-   Example:
+2. **Run `make_fields.py`.**
+
    ```bash
-   python rewardEvaluation/make_fields.py data/data.pkl.gz
+   python make_fields.py exports/data_new.pkl.gz
    ```
 
-2. The script creates case directories under `run/cylinder/<dataset_name>` using the provided `template/` folder.
-   - It writes `omega.csv` for the actuation signal associated with each dataset.
-   - It sets the correct start time inside `system/controlDict`.
-   - It uploads predicted fields to SmartRedis in a per-rank, per-time format that matches the OpenFOAM field reconstruction pipeline.
+   The script:
+   - Starts a local SmartSim experiment with a SmartRedis database on port 3999.
+   - For each source model and target signal pair, uploads the predicted fields to SmartRedis
+     per MPI rank and per time step using a fixed tensor key naming convention expected by
+     `svdToFoam`.
+   - Copies the `template/` directory to `run/cylinder/<src_model>/<tgt_signal>/`, writes the
+     corresponding `omega.csv`, and sets `startTime` in `system/controlDict`.
+   - Runs `svdToFoam` in parallel (2 MPI ranks) for fields `p` and `U` to reconstruct OpenFOAM
+     fields from the SmartRedis tensors.
+   - Runs `pimpleFoam -postProcess -dict system/FO_force -parallel` to compute force
+     coefficients using the `forces_recon` function object defined in `system/FO_force`.
+   - Stops the database when all cases are processed.
 
-3. Reconstruct OpenFOAM fields and compute forces.
-
-   `make_fields.py` launches `svdToFoam` for the fields `p` and `U`, then runs `pimpleFoam` to generate post-processed force coefficients in each reconstructed case directory.
-
-4. Plot and compare coefficients.
-
-   Use `plot_coeffs_combined.py` to compare reconstructed models against original reference cases across signal types. The script reads OpenFOAM-style coefficient files and produces comparison figures.
-
-   Example:
-   ```bash
-   python rewardEvaluation/plot_coeffs_combined.py <model_base_path> <original_cases_path> <signal_name>
+   Force coefficient results are written to:
    ```
+   run/cylinder/<src_model>/<tgt_signal>/postProcessing/forces_recon/<time>/coefficient.dat
+   ```
+
+3. **Plot and compare coefficients.**
+
+   Use `plot_coeffs_combined.py` to compare reconstructed model coefficients against the
+   original OpenFOAM reference for a given target signal:
+
+   ```bash
+   python plot_coeffs_combined.py <run/cylinder> <path/to/original_cases> <tgt_signal_name>
+   ```
+
+   The script reads `coefficient.dat` from each model's `postProcessing/forces_recon/` directory
+   and the original reference from `postProcessing/forces/0/coefficient.dat`. It saves separate
+   `<signal>_cd.png` and `<signal>_cl.png` figures to the current directory.
 
 ## Notes
 
-- The `template/` directory is the OpenFOAM case template used by `make_fields.py` to create run directories.
-- The script assumes reconstructed fields are available for `p` and `U` and that the template contains a working `controlDict` and mesh definition.
-- `plot_coeffs_combined.py` currently expects a directory structure with `postProcessing/forces_recon/.../coefficient.dat` for model cases and `postProcessing/forces/0/coefficient.dat` for original reference cases.
-
-This README should help you understand how to use the reward evaluation layer to turn DMDc outputs into reward-relevant OpenFOAM data and visualizations.
+- `svdToFoam` must be built from the modified source in `auxillary/svdToFoam/` before running
+  this workflow (see `auxillary/svdToFoam/README.md`).
+- The number of MPI ranks (`mpi_ranks = 2`) and SVD rank (`svd_rank = 20`) are set as
+  constants at the top of `make_fields.py` and must match the decomposition used when the
+  data was produced.
+- The `template/` directory already contains the pre-decomposed mesh for 2 processors
+  (`processor0/`, `processor1/`).

@@ -16,7 +16,10 @@ This folder contains two modified source files from the `openfoam-smartsim` libr
 
 ## Usage
 
-1. Clone the `openfoam-smartsim` repository from GitHub.
+1. Clone the `openfoam-smartsim` repository from GitHub:
+   ```bash
+   git clone https://github.com/OFDataCommittee/openfoam-smartsim.git
+   ```
 
 2. Copy both modified files into the repository, replacing the originals:
    ```bash
