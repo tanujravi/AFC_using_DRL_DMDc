@@ -2,6 +2,12 @@
 
 This folder contains the Dynamic Mode Decomposition with Control (DMDc) components used to build reduced-order models for the rotating cylinder active flow control problem.
 
+> **Environment:** All commands and notebooks in this folder should be run inside the `afcDrl`
+> virtual environment. Activate it from the repository root with:
+> ```bash
+> source afcDrl/bin/activate
+> ```
+
 The `dmdc/` module is split into two main parts:
 
 - `signal_library/` — generates and stores actuation signals used to excite the flow and build DMDc models.

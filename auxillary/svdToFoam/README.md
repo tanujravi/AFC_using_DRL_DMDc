@@ -2,6 +2,7 @@
 
 This folder contains a modified `svdToFoam.C` source file used to support the reconstructed field workflow in this project.
 
+
 ## Purpose
 
 The file is intended to replace the original `svdToFoam.C` implementation from the `openfoam-smartsim` library. The replacement allows reconstructed DMDc fields to be converted into OpenFOAM fields for use in downstream post-processing and reward evaluation.

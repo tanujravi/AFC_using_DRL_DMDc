@@ -17,7 +17,7 @@ alleviating memory constraints in data-driven flow modeling and control.
 
 This repository accompanies a master's thesis that develops a framework for coupling a
 reduced-order model (ROM) into a deep reinforcement learning (DRL) loop in a memory-efficient
-manner. The sample problem is the flow past a 2D cylinder controlled through the angular velocity
+manner. The sample problem used is the flow past a 2D cylinder controlled through the angular velocity
 of the cylinder. The [drlfoam](https://github.com/OFDataCommittee/drlfoam) library is used as the
 basis for the DRL framework, and Dynamic Mode Decomposition with Control (DMDc) is tested as the
 reduced-order model.
@@ -47,48 +47,95 @@ the pipeline required for this coupling:
 
 Each folder contains its own `README.md` with detailed usage instructions for that component.
 
+## Requirements
+
+The pipeline relies on the following software. Refer to the individual folder READMEs for
+component-specific details.
+
+- **OpenFOAM** (v2406 was used) — CFD solver for the flow past a cylinder.
+- **Python 3** with: [PyDMD](https://github.com/PyDMD/PyDMD) (DMDc model fitting),
+  [flowTorch](https://github.com/AndreWeiner/flowtorch) (loading OpenFOAM data),
+  NumPy, and standard scientific Python libraries.
+- [**SmartSim / SmartRedis**](https://www.craylabs.org/docs/index.html) — used by the
+  partitioned SVD component for coupling OpenFOAM with Python.
+- [**drlfoam**](https://github.com/OFDataCommittee/drlfoam) — the DRL–OpenFOAM coupling
+  framework into which the ROM is integrated.
+- [**openfoam-smartsim**](https://github.com/OFDataCommittee/openfoam-smartsim) — provides the
+  `svdToFoam` utility (a modified version is included in `auxillary/`).
+
 ## Workflow used for the project
 
 Below is the step-by-step workflow showing how the different components are built and used. In
 the thesis this is done for the flow past a 2D cylinder. The partitioned SVD algorithm would
 normally be used when building the DMDc model; however, because the 2D cylinder case is not
 memory-intensive, it is not used here. Instead, the partitioned SVD code is validated
-independently (see `partitionedSVD/`), as illustrated below.
+independently (see `partitionedSVD/`).
 
-![Comparison of streaming partitioned SVD against direct SVD](images/compare_svd_stream_to_full.png)
+1. **Set up the environment.** Create and activate a Python virtual environment called `afcDrl`
+   at the repository root, then install all required libraries.
 
-1. **Generate the actuation signals.** A required signal is generated in Python as shown in
+   ```bash
+   # repository top-level
+   python3 -m venv afcDrl
+   source afcDrl/bin/activate
+   pip install --upgrade pip
+   pip install -r requirements.txt
+   ```
+
+   > **Note:** `flowtorch` is installed directly from its GitHub repository
+   > (`git+https://github.com/FlowModelingControl/flowtorch`) as listed in `requirements.txt`.
+
+   **SmartSim** requires an additional build step after the pip install to compile the
+   backend (RedisAI and the SmartRedis C library):
+
+   ```bash
+   # CPU-only build — replace --device cpu with --device gpu for GPU support
+   smart build --device cpu
+   ```
+
+   **svdToFoam** (used for reward evaluation) is a modified version of the utility from the
+   [openfoam-smartsim](https://github.com/OFDataCommittee/openfoam-smartsim) repository.
+   Follow the build instructions in `auxillary/svdToFoam/README.md`.
+
+   **drlfoam** is required for the final integration step. Clone it alongside this repository
+   and follow its own setup instructions before proceeding to step 7:
+
+   ```bash
+   git clone https://github.com/OFDataCommittee/drlfoam.git
+   ```
+
+2. **Generate the actuation signals.** A required signal is generated in Python as shown in
    `dmdc/signal_library/cylinder2D/signal_generator.ipynb`. The signal data is stored as time
    series data in a file called `omega.csv`. Four signals are used in this study: Random walk,
    Chirp, Chirp with varying amplitude, and Amplitude-modulated.
 
-2. **Run the OpenFOAM simulations.** Once the signal data is generated, it is used to run an
+3. **Run the OpenFOAM simulations.** Once the signal data is generated, it is used to run an
    OpenFOAM simulation by enforcing a rotating-wall-velocity boundary condition, supplied with
    the time series angular velocity data. A template setup is provided in
    `dmdc/signal_library/cylinder2D/template`.
 
-3. **Build the DMDc models.** Once the simulations are run for the different signals, the data
+4. **Build the DMDc models.** Once the simulations are run for the different signals, the data
    required to build a DMDc model is available. A time-delayed version of DMDc is implemented to
    improve robustness, so the model has two hyperparameters: the number of time delays and the
    SVD rank. The individual models are tested in the notebooks under
    `dmdc/evaluation/notebooks`, and the optimum parameters are selected. These parameters are
    then used to find the individual DMDc linear operators.
 
-4. **Combine the models (MORS).** A multi-operator random shuffling (MORS) approach is proposed,
+5. **Combine the models (MORS).** A multi-operator random shuffling (MORS) approach is proposed,
    where each of these models is used in a random way to advance the time step. To achieve this,
    the state is projected onto a common subspace built from the data of all signals, as shown in
    `dmdc/evaluation/notebooks/combined_basis.ipynb`. The operators are stored and can then be
    used to advance the state in time for a given initial state and actuation.
 
-5. **Evaluate rewards from the reduced fields.** The predicted states are obtained as time
-   series data. To evaluate the rewards, the OpenFOAM post-processing utility `forceCoeffs` is
+6. **Evaluate rewards from the reduced fields.** The predicted states are obtained as time
+   series data (NumPy arrays). To evaluate the rewards, the OpenFOAM post-processing utility `forceCoeffs` is
    used. To convert the predicted NumPy arrays into OpenFOAM fields, the `svdToFoam` utility from
    `openfoam-smartsim` is used. Multiple changes were made to the existing code to accommodate
    both scalar and vector fields; the modified code is provided in `auxillary/svdToFoam`. Once
    the lift and drag histories are computed, they are tested against the original predictions.
    This completes the components required to build the environment (see `rewardEvaluation/`).
 
-6. **Integrate with DRL.** The environment is integrated with DRL using the `drlfoam` library.
+7. **Integrate with DRL.** The environment is integrated with DRL using the `drlfoam` library.
    In the current implementation no changes are made to the contents of the `drlfoam` library
    itself; the integration is done through changes to the `Allrun` script. A MORS strategy is
    used, making use of all the models built from the Random walk, Chirp, Chirp with varying
@@ -105,21 +152,6 @@ histories were nearly identical. This indicates that the DMDc model built was no
 enough to predict the rapid changes in dynamics associated with a typical RL actuation signal. See the thesis (Chapter 6 and Chapter 7) for a detailed
 discussion and suggested directions for future work.
 
-## Requirements
-
-The pipeline relies on the following software. Refer to the individual folder READMEs for
-component-specific details.
-
-- **OpenFOAM** (v2406 was used) — CFD solver for the flow past a cylinder.
-- **Python 3** with: [PyDMD](https://github.com/PyDMD/PyDMD) (DMDc model fitting),
-  [flowTorch](https://github.com/AndreWeiner/flowtorch) (loading OpenFOAM data),
-  NumPy, and standard scientific Python libraries.
-- [**SmartSim / SmartRedis**](https://www.craylabs.org/docs/index.html) — used by the
-  partitioned SVD component for coupling OpenFOAM with Python.
-- [**drlfoam**](https://github.com/OFDataCommittee/drlfoam) — the DRL–OpenFOAM coupling
-  framework into which the ROM is integrated.
-- [**openfoam-smartsim**](https://github.com/OFDataCommittee/openfoam-smartsim) — provides the
-  `svdToFoam` utility (a modified version is included in `auxillary/`).
 
 ## Report
 

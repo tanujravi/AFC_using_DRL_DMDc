@@ -2,6 +2,12 @@
 
 This folder contains tools to convert reduced-order model predictions into OpenFOAM fields and evaluate aerodynamic performance using force coefficients.
 
+> **Environment:** All commands and scripts in this folder should be run inside the `afcDrl`
+> virtual environment. Activate it from the repository root with:
+> ```bash
+> source afcDrl/bin/activate
+> ```
+
 The workflow in `rewardEvaluation/` is intended to support the DRL integration by computing reward-related quantities such as lift and drag from reconstructed pressure and velocity fields.
 
 ## Folder structure

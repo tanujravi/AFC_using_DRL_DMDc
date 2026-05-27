@@ -1,5 +1,11 @@
 ### Integration of Reduced-Order Model with Deep Reinforcement Learning
 
+> **Environment:** All commands and scripts in this folder should be run inside the `afcDrl`
+> virtual environment. Activate it from the repository root with:
+> ```bash
+> source afcDrl/bin/activate
+> ```
+
 This module demonstrates the integration of the Dynamic Mode Decomposition with Control (DMDc) reduced-order model into the deep reinforcement learning (DRL) framework provided by the `drlfoam` library. The integration replaces the full OpenFOAM simulation environment with the DMDc surrogate model, enabling faster training of control policies for active flow control applications without modifying the core `drlfoam` codebase.
 
 The example provided is for the flow past a 2D rotating cylinder, where the control action is the angular velocity of the cylinder. The DMDc model predicts the flow state evolution based on actuation inputs, and rewards are computed from the predicted lift and drag coefficients.

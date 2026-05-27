@@ -1,0 +1,9 @@
+pydmd
+git+https://github.com/FlowModelingControl/flowtorch
+numpy
+scipy
+matplotlib
+pandas
+pyyaml
+smartsim
+smartredis

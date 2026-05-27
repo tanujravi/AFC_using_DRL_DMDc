@@ -1,4 +1,11 @@
 ### Online Partitioned SVD for streaming OpenFOAM simulations
+
+> **Environment:** All commands in this folder should be run inside the `afcDrl` virtual
+> environment. Activate it from the repository root with:
+> ```bash
+> source afcDrl/bin/activate
+> ```
+
 This module implements an online eigen-partitioned Singular Value Decomposition (SVD) pipeline designed to process high-dimensional simulation data from a live OpenFOAM run in a distributed and memory-efficient manner. The SVD computation is split across MPI ranks to enable streaming-based compression and mode extraction in parallel, making it suitable for large-scale CFD simulations.
 
 The system integrates with the SmartSim orchestration framework to launch ensembles of SVD tasks and manage data transfers via the SmartRedis client. It supports incremental updates to the decomposition, reconstruction of modes, and conversion back to OpenFOAM fields for post-processing.
