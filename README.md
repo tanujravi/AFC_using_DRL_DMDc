@@ -155,22 +155,23 @@ discussion and suggested directions for future work.
 
 ## Report
 
-The report of this thesis can be found here: <https://zenodo.org/records/18375343>
+The report of this thesis can be found here: <https://zenodo.org/records/20438867>
 
 BibTeX citation:
 
 ```bibtex
-@misc{ravi_2026_18375343,
+@misc{ravi_2026_20438867,
   author       = {Ravi, Tanuj and
                   Weiner, Andre and
                   Geise, Janis},
   title        = {Flow modeling and control employing dynamic mode
-                  decomposition and deep reinforcement learning},
+                   decomposition and deep reinforcement learning
+                  },
   month        = jan,
   year         = 2026,
   publisher    = {Zenodo},
-  doi          = {10.5281/zenodo.18375343},
-  url          = {https://doi.org/10.5281/zenodo.18375343}
+  doi          = {10.5281/zenodo.20438867},
+  url          = {https://doi.org/10.5281/zenodo.20438867},
 }
 ```
 
